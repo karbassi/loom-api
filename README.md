@@ -8,7 +8,11 @@ Command-line interface for Loom's internal GraphQL API. Zero dependencies — ru
 
 1. Open Loom in your browser, open DevTools → Application → Cookies
 2. Copy the `connect.sid` value
-3. Export it:
+3. Add to `../.env`:
+   ```sh
+   LOOM_COOKIE=connect.sid=s%3A...
+   ```
+   Or export directly:
    ```sh
    export LOOM_COOKIE="connect.sid=s%3A..."
    ```
@@ -20,6 +24,8 @@ Command-line interface for Loom's internal GraphQL API. Zero dependencies — ru
    ```sh
    export LOOM_AUTH_FILE=/path/to/auth.json
    ```
+
+Auth resolution: `.env` → `LOOM_COOKIE` → `LOOM_AUTH_FILE` → `../auth.json`
 
 ## Usage
 
@@ -49,7 +55,7 @@ loom whoami                      # check auth status
 loom dump <id>                   # all data as JSON
 ```
 
-Anywhere `<id>` is accepted, you can paste a full Loom URL instead:
+Anywhere `<id>` is accepted, you can paste a full Loom URL:
 
 ```sh
 loom video https://www.loom.com/share/abc123def456...
@@ -64,6 +70,48 @@ loom list --json | jq '.[].name'
 loom video <id> --json | jq '.views'
 loom comments <id> --json
 ```
+
+### Shell completions
+
+```sh
+# bash — add to ~/.bashrc
+eval "$(loom completions bash)"
+
+# zsh — add to ~/.zshrc
+eval "$(loom completions zsh)"
+
+# fish — save to completions dir
+loom completions fish > ~/.config/fish/completions/loom.fish
+```
+
+### Per-command help
+
+```sh
+loom video --help
+loom list --help
+```
+
+## Error handling
+
+Errors include context and hints:
+
+```
+error: unknown command "vdieo"
+
+  Did you mean "video"?
+
+  hint: Run "loom help" for a list of commands.
+```
+
+```
+error: missing required argument
+  command: loom video
+
+  hint: loom video <ID>
+        Accepts a video ID or full Loom URL.
+```
+
+Exit codes: `0` success, `1` runtime error, `2` usage error.
 
 ## Auth errors
 
