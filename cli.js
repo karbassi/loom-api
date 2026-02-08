@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import fs from "fs";
 import path from "path";
+import { spawnSync } from "child_process";
 import { LoomClient } from "./loom.js";
 
 const VERSION = "1.0.0";
@@ -52,12 +53,19 @@ const COMMANDS = {
                  examples: ['eval "$(loom completions zsh)"', "loom completions fish > ~/.config/fish/completions/loom.fish"] },
 };
 
-const KNOWN_FLAGS = new Set(["--json", "--all", "--help", "--version", "--no-color", "-h", "-V", "-n"]);
+const KNOWN_FLAGS = new Set(["--json", "--all", "--help", "--version", "--no-color", "--color", "-h", "-V", "-n"]);
 
 // --- Color ---
 
 const useColor = (() => {
   const argv = process.argv;
+  const colorFlag = argv.find(a => a.startsWith("--color="));
+  if (colorFlag) {
+    const val = colorFlag.split("=")[1];
+    if (val === "never") return false;
+    if (val === "always") return true;
+    // "auto" falls through to detection
+  }
   if (argv.includes("--no-color")) return false;
   if (process.env.NO_COLOR !== undefined) return false;
   if (process.env.FORCE_COLOR !== undefined) return true;
@@ -89,6 +97,17 @@ function usageError(msg) {
 // Write to stderr — for status messages, counts, hints (not data)
 function info(msg) {
   process.stderr.write(msg + "\n");
+}
+
+// Page long output through $PAGER when TTY (default: less -RFX)
+function page(text) {
+  if (!text) return;
+  if (!process.stdout.isTTY) { process.stdout.write(text); return; }
+  const rows = process.stdout.rows || 24;
+  if (text.split("\n").length <= rows) { process.stdout.write(text); return; }
+  const pagerCmd = process.env.PAGER || "less -RFX";
+  const parts = pagerCmd.split(/\s+/);
+  spawnSync(parts[0], parts.slice(1), { input: text, stdio: ["pipe", "inherit", "inherit"] });
 }
 
 // Spinner for network operations (stderr only, TTY only)
@@ -134,7 +153,7 @@ function levenshtein(a, b) {
 function checkUnknownFlags(args) {
   for (const a of args) {
     if (a === "--") break;
-    if (a.startsWith("-") && !KNOWN_FLAGS.has(a) && !/^-\d+$/.test(a)) {
+    if (a.startsWith("-") && !KNOWN_FLAGS.has(a) && !KNOWN_FLAGS.has(a.split("=")[0]) && !/^-\d+$/.test(a)) {
       const suggestion = suggest(a, [...KNOWN_FLAGS]);
       let msg = `error: unknown flag "${a}"`;
       if (suggestion) msg += `\n\n  Did you mean ${c.cyan(suggestion)}?`;
@@ -230,7 +249,8 @@ ${c.bold("OPTIONS")}
   --json         Output raw JSON (pipe to jq)
   -n ${c.dim("<COUNT>")}     Limit results (for list) ${c.dim("[default: 20]")}
   --all          Show all results (for list)
-  --no-color     Disable color output
+  --color ${c.dim("<WHEN>")}  Color output: auto, always, never ${c.dim("[default: auto]")}
+  --no-color     Alias for --color=never
   -h, --help     Show help
   -V, --version  Show version
 
@@ -397,10 +417,9 @@ async function main() {
         }
         if (videos.length === 0) { info("No videos."); return; }
         if (jsonMode) return console.log(JSON.stringify(videos, null, 2));
-        for (const v of videos) {
-          console.log(`${c.dim(v.id)}  ${v.name}`);
-        }
-        info(`\n${c.dim(`${videos.length} videos`)}` + (limit !== Infinity ? c.dim('  (use "loom list --all" for everything)') : ""));
+        const lines = videos.map(v => `${c.dim(v.id)}  ${v.name}`);
+        page(lines.join("\n") + "\n");
+        info(`${c.dim(`${videos.length} videos`)}` + (limit !== Infinity ? c.dim('  (use "loom list --all" for everything)') : ""));
         break;
       }
       case "video": {
@@ -423,14 +442,14 @@ async function main() {
       case "transcript": {
         needsId(videoId, "transcript");
         const text = await client.getTranscriptText(videoId);
-        if (text) console.log(text);
+        if (text) page(text + "\n");
         else info("No transcript available.");
         break;
       }
       case "captions": {
         needsId(videoId, "captions");
         const vtt = await client.getCaptions(videoId);
-        if (vtt) console.log(vtt);
+        if (vtt) page(vtt + "\n");
         else info("No captions available.");
         break;
       }
@@ -593,7 +612,7 @@ async function main() {
           client.getTasks(videoId).catch(() => []),
           client.getDescription(videoId).catch(() => null),
         ]);
-        console.log(JSON.stringify({
+        page(JSON.stringify({
           video,
           description,
           chapters: chapters?.content || null,
@@ -601,7 +620,7 @@ async function main() {
           transcript,
           tasks,
           comments,
-        }, null, 2));
+        }, null, 2) + "\n");
         break;
       }
       default: {
