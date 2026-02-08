@@ -1,16 +1,8 @@
-const fs = require("fs");
-const path = require("path");
-
-const AUTH_FILE = process.env.LOOM_AUTH_FILE || path.join(__dirname, "..", "auth.json");
 const GRAPHQL_URL = "https://www.loom.com/graphql";
 
-class LoomClient {
-  constructor(authFile = AUTH_FILE) {
-    const state = JSON.parse(fs.readFileSync(authFile, "utf8"));
-    this.cookies = state.cookies
-      .filter((c) => c.domain.includes("loom.com"))
-      .map((c) => `${c.name}=${c.value}`)
-      .join("; ");
+export class LoomClient {
+  constructor(cookies) {
+    this.cookies = cookies;
   }
 
   async graphql(operationName, query, variables = {}) {
@@ -383,6 +375,7 @@ class LoomClient {
     );
     return data.getVideoBacklinks?.backlinks || [];
   }
+
   async getKeyTakeaways(videoId) {
     const data = await this.graphql(
       "GetKeyTakeaways",
@@ -985,5 +978,3 @@ function formatTimestamp(seconds) {
   const s = Math.floor(seconds % 60);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
-
-module.exports = { LoomClient };

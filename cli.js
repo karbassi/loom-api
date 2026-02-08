@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-const fs = require("fs");
-const path = require("path");
+import fs from "fs";
+import path from "path";
+import { LoomClient } from "./loom.js";
 
-const AUTH_FILE = process.env.LOOM_AUTH_FILE || path.join(__dirname, "..", "auth.json");
+const AUTH_FILE = process.env.LOOM_AUTH_FILE || path.join(import.meta.dir, "..", "auth.json");
 
 const COMMANDS = {
   list: "List recent videos (default 20, or -n COUNT)",
@@ -32,13 +33,19 @@ function die(msg) {
   process.exit(1);
 }
 
-function checkAuth() {
+function resolveAuth() {
+  if (process.env.LOOM_COOKIE) {
+    return { cookies: process.env.LOOM_COOKIE, sid: null };
+  }
+
   if (!fs.existsSync(AUTH_FILE)) {
     die(
-      `No auth.json found at ${AUTH_FILE}\n\n` +
-      `Run "node login.js" to authenticate, or set LOOM_AUTH_FILE.`
+      `No auth found. Either:\n` +
+      `  export LOOM_COOKIE="connect.sid=..."  (from browser DevTools)\n` +
+      `  Run "node login.js" to create ${AUTH_FILE}`
     );
   }
+
   const state = JSON.parse(fs.readFileSync(AUTH_FILE, "utf8"));
   const sid = state.cookies?.find((c) => c.name === "connect.sid");
   if (!sid) {
@@ -50,7 +57,13 @@ function checkAuth() {
       `Run "node refresh.js" to extend, or "node login.js" for a fresh session.`
     );
   }
-  return sid;
+
+  const cookies = state.cookies
+    .filter((c) => c.domain.includes("loom.com"))
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ");
+
+  return { cookies, sid };
 }
 
 function fmtDuration(secs) {
@@ -82,34 +95,28 @@ async function main() {
     for (const [cmd, desc] of Object.entries(COMMANDS)) {
       console.log(`  ${cmd.padEnd(14)} ${desc}`);
     }
-    console.log(`\nAuth: ${AUTH_FILE}`);
+    console.log(`\nAuth: LOOM_COOKIE env, or ${AUTH_FILE}`);
     return;
   }
 
-  const sid = checkAuth();
-  const { LoomClient } = require("./loom");
-
-  let client;
-  try {
-    client = new LoomClient(AUTH_FILE);
-  } catch (err) {
-    die(`Failed to load auth: ${err.message}`);
-  }
-
+  const { cookies, sid } = resolveAuth();
+  const client = new LoomClient(cookies);
   const videoId = args[0];
 
   try {
     switch (command) {
       case "whoami": {
-        const daysLeft = sid.expires
-          ? ((sid.expires * 1000 - Date.now()) / 86400000).toFixed(1)
-          : "unknown";
         const { videos } = await client.listVideos({ limit: 1 });
         const video = videos[0];
         const v = await client.getVideo(video.id);
         const owner = v.owner || {};
         console.log(`Logged in as: ${owner.display_name || "unknown"} (user ${owner.id || "?"})`);
-        console.log(`Session expires in ${daysLeft} days`);
+        if (sid?.expires) {
+          const daysLeft = ((sid.expires * 1000 - Date.now()) / 86400000).toFixed(1);
+          console.log(`Session expires in ${daysLeft} days`);
+        } else {
+          console.log(`Auth: LOOM_COOKIE`);
+        }
         console.log(`Videos: ${(await client.getAllVideos()).length}`);
         break;
       }
