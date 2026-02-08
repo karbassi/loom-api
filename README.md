@@ -84,6 +84,24 @@ eval "$(loom completions zsh)"
 loom completions fish > ~/.config/fish/completions/loom.fish
 ```
 
+### Color output
+
+Output is colorized when stdout is a terminal (dim IDs, bold titles, colored status). Color is automatically disabled when piping.
+
+To disable color explicitly:
+
+```sh
+loom list --no-color
+# or
+NO_COLOR=1 loom list
+```
+
+To force color when piping (e.g. to `less -R`):
+
+```sh
+FORCE_COLOR=1 loom list | less -R
+```
+
 ### Per-command help
 
 ```sh
