@@ -51,9 +51,44 @@ const COMMANDS = {
                  examples: ["loom dump abc123", "loom dump abc123 > meeting.json", "loom dump abc123 | jq '.transcript'"] },
   completions: { desc: "Generate shell completions",  usage: "loom completions <bash|zsh|fish>",
                  examples: ['eval "$(loom completions zsh)"', "loom completions fish > ~/.config/fish/completions/loom.fish"] },
+
+  // --- Write commands ---
+  rename:          { desc: "Rename a video",              usage: "loom rename <ID> <NAME>",
+                     examples: ['loom rename abc123 "New Title"', 'loom rename abc123 "New Title" --dry-run'] },
+  "edit-description": { desc: "Edit video description",  usage: "loom edit-description <ID> <TEXT>",
+                     examples: ['loom edit-description abc123 "Updated description"'] },
+  archive:         { desc: "Archive video(s)",            usage: "loom archive <ID> [ID...]",
+                     examples: ["loom archive abc123", "loom archive abc123 def456 --yes"] },
+  unarchive:       { desc: "Unarchive video(s)",          usage: "loom unarchive <ID> [ID...]" },
+  delete:          { desc: "Delete a video",              usage: "loom delete <ID> --force",
+                     examples: ["loom delete abc123 --force", "loom delete abc123 --force --dry-run"] },
+  recover:         { desc: "Recover a deleted video",     usage: "loom recover <ID>" },
+  duplicate:       { desc: "Duplicate a video",           usage: "loom duplicate <ID>" },
+  pin:             { desc: "Pin a video",                 usage: "loom pin <ID>" },
+  unpin:           { desc: "Unpin a video",               usage: "loom unpin <ID>" },
+  comment:         { desc: "Add a comment",               usage: "loom comment <ID> <TEXT> [--at SEC]",
+                     examples: ['loom comment abc123 "Great video!"', 'loom comment abc123 "See this part" --at 30'] },
+  "delete-comment": { desc: "Delete a comment",           usage: "loom delete-comment <COMMENT_ID> --force" },
+  "add-task":      { desc: "Add an action item",          usage: "loom add-task <ID> <TEXT> [--at SEC]",
+                     examples: ['loom add-task abc123 "Follow up on this"', 'loom add-task abc123 "Review" --at 45'] },
+  done:            { desc: "Mark a task as done",          usage: "loom done <TASK_ID>" },
+  "delete-task":   { desc: "Delete a task",               usage: "loom delete-task <TASK_ID> --force" },
+  "create-folder": { desc: "Create a folder",             usage: "loom create-folder <NAME>",
+                     examples: ['loom create-folder "Project X"'] },
+  "rename-folder": { desc: "Rename a folder",             usage: "loom rename-folder <FOLDER_ID> <NAME>",
+                     examples: ['loom rename-folder abc123 "New Folder Name"'] },
+  "delete-folder": { desc: "Delete folder(s)",            usage: "loom delete-folder <ID> [ID...] --force",
+                     examples: ["loom delete-folder abc123 --force"] },
+  move:            { desc: "Move video(s) to a folder",   usage: "loom move <ID> [ID...] --to <FOLDER_ID>",
+                     examples: ["loom move abc123 --to folder456", "loom move abc123 def456 --to folder456 --yes"] },
+  follow:          { desc: "Follow a video",              usage: "loom follow <ID>" },
+  unfollow:        { desc: "Unfollow a video",            usage: "loom unfollow <ID>" },
 };
 
-const KNOWN_FLAGS = new Set(["--json", "--all", "--help", "--version", "--no-color", "--color", "-h", "-V", "-n"]);
+const KNOWN_FLAGS = new Set([
+  "--json", "--all", "--help", "--version", "--no-color", "--color", "-h", "-V", "-n",
+  "--dry-run", "--yes", "-y", "--force", "-f", "--at", "--to",
+]);
 
 // --- Color ---
 
@@ -232,27 +267,71 @@ function needsId(id, command) {
   );
 }
 
+// --- Write command helpers ---
+
+function parseWriteArgs(args, valueFlags = []) {
+  const flags = { dryRun: false, yes: false, force: false, json: false };
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--dry-run") flags.dryRun = true;
+    else if (a === "--yes" || a === "-y") flags.yes = true;
+    else if (a === "--force" || a === "-f") flags.force = true;
+    else if (a === "--json") flags.json = true;
+    else if (a === "--help" || a === "-h") { /* handled elsewhere */ }
+    else if (valueFlags.includes(a) && i + 1 < args.length) {
+      flags[a.replace(/^--/, "")] = args[++i];
+    } else if (!a.startsWith("-")) {
+      positional.push(a);
+    }
+  }
+  return { flags, positional };
+}
+
+async function confirm(message) {
+  if (!process.stdin.isTTY) return false;
+  process.stderr.write(`${message} [y/N] `);
+  const buf = Buffer.alloc(64);
+  const fd = fs.openSync("/dev/tty", "r");
+  const n = fs.readSync(fd, buf);
+  fs.closeSync(fd);
+  return /^y(es)?$/i.test(buf.slice(0, n).toString().trim());
+}
+
 // --- Help ---
 
+const READ_COMMANDS = new Set([
+  "list", "search", "video", "transcript", "captions", "download", "chapters",
+  "summary", "description", "comments", "tasks", "reactions", "notes", "folders",
+  "spaces", "backlinks", "tags", "user", "open", "whoami", "dump", "completions",
+]);
+
 function showHelp() {
-  console.log(`${c.bold("Loom CLI")} — query Loom videos from the command line
+  console.log(`${c.bold("Loom CLI")} — query and manage Loom videos from the command line
 
 ${c.bold("USAGE")}
   loom <command> [args] [--json]
 
-${c.bold("COMMANDS")}`);
+${c.bold("READ COMMANDS")}`);
   for (const [cmd, { desc }] of Object.entries(COMMANDS)) {
-    console.log(`  ${c.cyan(cmd.padEnd(14))} ${desc}`);
+    if (READ_COMMANDS.has(cmd)) console.log(`  ${c.cyan(cmd.padEnd(18))} ${desc}`);
+  }
+  console.log(`\n${c.bold("WRITE COMMANDS")}`);
+  for (const [cmd, { desc }] of Object.entries(COMMANDS)) {
+    if (!READ_COMMANDS.has(cmd)) console.log(`  ${c.cyan(cmd.padEnd(18))} ${desc}`);
   }
   console.log(`
 ${c.bold("OPTIONS")}
-  --json         Output raw JSON (pipe to jq)
-  -n ${c.dim("<COUNT>")}     Limit results (for list) ${c.dim("[default: 20]")}
-  --all          Show all results (for list)
-  --color ${c.dim("<WHEN>")}  Color output: auto, always, never ${c.dim("[default: auto]")}
-  --no-color     Alias for --color=never
-  -h, --help     Show help
-  -V, --version  Show version
+  --json          Output raw JSON (pipe to jq)
+  -n ${c.dim("<COUNT>")}      Limit results (for list) ${c.dim("[default: 20]")}
+  --all           Show all results (for list)
+  --dry-run       Preview without executing (write commands)
+  --force, -f     Required for destructive commands
+  --yes, -y       Skip confirmation prompts
+  --color ${c.dim("<WHEN>")}   Color output: auto, always, never ${c.dim("[default: auto]")}
+  --no-color      Alias for --color=never
+  -h, --help      Show help
+  -V, --version   Show version
 
 ${c.bold("EXAMPLES")}
   ${c.dim("$")} loom list -n 5
@@ -260,7 +339,9 @@ ${c.bold("EXAMPLES")}
   ${c.dim("$")} loom search "onboarding walkthrough"
   ${c.dim("$")} loom transcript abc123 | pbcopy
   ${c.dim("$")} loom list --json | jq '.[].name'
-  ${c.dim("$")} loom dump abc123 > meeting.json
+  ${c.dim("$")} loom rename abc123 "New Title"
+  ${c.dim("$")} loom delete abc123 --force
+  ${c.dim("$")} loom move abc123 --to folder456
 
 ${c.bold("ENVIRONMENT")}
   LOOM_COOKIE      connect.sid cookie value ${c.dim("[from browser DevTools]")}
@@ -273,15 +354,23 @@ ${c.bold("LEARN MORE")}
 function showCommandHelp(command) {
   const cmd = COMMANDS[command];
   if (!cmd) return false;
+  const isWrite = !READ_COMMANDS.has(command);
   console.log(`${cmd.desc}
 
 ${c.bold("USAGE")}
-  ${cmd.usage} [--json]`);
+  ${cmd.usage} [--json]${isWrite ? " [--dry-run]" : ""}`);
   if (cmd.examples?.length) {
     console.log(`\n${c.bold("EXAMPLES")}`);
     for (const ex of cmd.examples) {
       console.log(`  ${c.dim("$")} ${ex}`);
     }
+  }
+  if (isWrite) {
+    console.log(`\n${c.bold("FLAGS")}`);
+    console.log(`  --dry-run       Preview without executing`);
+    console.log(`  --json          Output raw JSON`);
+    if (cmd.usage.includes("--force")) console.log(`  --force, -f     Required (safety guard)`);
+    if (cmd.usage.includes("[ID...]")) console.log(`  --yes, -y       Skip confirmation for bulk operations`);
   }
   return true;
 }
@@ -623,6 +712,257 @@ async function main() {
         }, null, 2) + "\n");
         break;
       }
+      // --- Write commands ---
+
+      case "rename": {
+        const { flags, positional } = parseWriteArgs(args);
+        const id = parseId(positional[0]);
+        const name = positional.slice(1).join(" ");
+        needsId(id, "rename");
+        if (!name) usageError(`error: missing required argument\n  command: loom rename\n\n  hint: loom rename <ID> <NAME>`);
+        if (flags.dryRun) { spin.stop(); info(`Would rename ${c.dim(id)} to ${c.bold(name)}`); break; }
+        const result = await client.updateVideoName(id, name);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Renamed ${c.dim(id)} → ${c.bold(result.name)}`);
+        break;
+      }
+
+      case "edit-description": {
+        const { flags, positional } = parseWriteArgs(args);
+        const id = parseId(positional[0]);
+        const text = positional.slice(1).join(" ");
+        needsId(id, "edit-description");
+        if (!text) usageError(`error: missing required argument\n  command: loom edit-description\n\n  hint: loom edit-description <ID> <TEXT>`);
+        if (flags.dryRun) { spin.stop(); info(`Would update description of ${c.dim(id)}`); break; }
+        const result = await client.updateVideoDescription(id, text);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Updated description of ${c.dim(id)}`);
+        break;
+      }
+
+      case "archive": case "unarchive": {
+        const isArchive = command === "archive";
+        const { flags, positional } = parseWriteArgs(args);
+        const ids = positional.map(parseId).filter(Boolean);
+        if (ids.length === 0) usageError(`error: missing required argument\n  command: loom ${command}\n\n  hint: loom ${command} <ID> [ID...]`);
+        if (isArchive && ids.length > 1 && !flags.yes) {
+          const ok = await confirm(`Archive ${ids.length} videos?`);
+          if (!ok) { spin.stop(); info("Aborted."); break; }
+        }
+        if (flags.dryRun) { spin.stop(); info(`Would ${command} ${ids.length} video(s): ${ids.map(i => c.dim(i)).join(", ")}`); break; }
+        const result = await client.archiveVideos(ids, isArchive);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`${isArchive ? "Archived" : "Unarchived"} ${ids.length} video(s)`);
+        break;
+      }
+
+      case "delete": {
+        const { flags, positional } = parseWriteArgs(args);
+        const id = parseId(positional[0]);
+        needsId(id, "delete");
+        if (!flags.force) usageError(`error: --force required for delete\n\n  hint: loom delete <ID> --force\n        This permanently deletes the video.`);
+        if (!flags.yes) {
+          const ok = await confirm(`Permanently delete ${c.dim(id)}?`);
+          if (!ok) { spin.stop(); info("Aborted."); break; }
+        }
+        if (flags.dryRun) { spin.stop(); info(`Would delete ${c.dim(id)}`); break; }
+        const result = await client.deleteVideo(id);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Deleted ${c.dim(id)}`);
+        break;
+      }
+
+      case "recover": {
+        const { flags, positional } = parseWriteArgs(args);
+        const id = parseId(positional[0]);
+        needsId(id, "recover");
+        if (flags.dryRun) { spin.stop(); info(`Would recover ${c.dim(id)}`); break; }
+        const result = await client.recoverVideo(id);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Recovered ${c.dim(id)}`);
+        break;
+      }
+
+      case "duplicate": {
+        const { flags, positional } = parseWriteArgs(args);
+        const id = parseId(positional[0]);
+        needsId(id, "duplicate");
+        if (flags.dryRun) { spin.stop(); info(`Would duplicate ${c.dim(id)}`); break; }
+        const result = await client.duplicateVideo(id);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Duplicated ${c.dim(id)}`);
+        break;
+      }
+
+      case "pin": case "unpin": {
+        const isPinning = command === "pin";
+        const { flags, positional } = parseWriteArgs(args);
+        const id = parseId(positional[0]);
+        needsId(id, command);
+        if (flags.dryRun) { spin.stop(); info(`Would ${command} ${c.dim(id)}`); break; }
+        const result = await client.updateVideoPinStatus(id, isPinning);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`${isPinning ? "Pinned" : "Unpinned"} ${c.dim(id)}`);
+        break;
+      }
+
+      case "comment": {
+        const { flags, positional } = parseWriteArgs(args, ["--at"]);
+        const id = parseId(positional[0]);
+        const text = positional.slice(1).join(" ");
+        needsId(id, "comment");
+        if (!text) usageError(`error: missing required argument\n  command: loom comment\n\n  hint: loom comment <ID> <TEXT> [--at SEC]`);
+        const timestamp = flags.at != null ? parseInt(flags.at, 10) : 0;
+        if (flags.dryRun) { spin.stop(); info(`Would comment on ${c.dim(id)}: "${text}"${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`); break; }
+        const result = await client.createComment(id, text, timestamp);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Comment added to ${c.dim(id)}${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`);
+        break;
+      }
+
+      case "delete-comment": {
+        const { flags, positional } = parseWriteArgs(args);
+        const commentId = positional[0];
+        if (!commentId) usageError(`error: missing required argument\n  command: loom delete-comment\n\n  hint: loom delete-comment <COMMENT_ID> --force`);
+        if (!flags.force) usageError(`error: --force required for delete-comment\n\n  hint: loom delete-comment <COMMENT_ID> --force`);
+        if (!flags.yes) {
+          const ok = await confirm(`Delete comment ${c.dim(commentId)}?`);
+          if (!ok) { spin.stop(); info("Aborted."); break; }
+        }
+        if (flags.dryRun) { spin.stop(); info(`Would delete comment ${c.dim(commentId)}`); break; }
+        const result = await client.deleteComment(commentId);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Deleted comment ${c.dim(commentId)}`);
+        break;
+      }
+
+      case "add-task": {
+        const { flags, positional } = parseWriteArgs(args, ["--at"]);
+        const id = parseId(positional[0]);
+        const text = positional.slice(1).join(" ");
+        needsId(id, "add-task");
+        if (!text) usageError(`error: missing required argument\n  command: loom add-task\n\n  hint: loom add-task <ID> <TEXT> [--at SEC]`);
+        const timestamp = flags.at != null ? parseInt(flags.at, 10) : 0;
+        if (flags.dryRun) { spin.stop(); info(`Would add task to ${c.dim(id)}: "${text}"${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`); break; }
+        const result = await client.createTask(id, text, timestamp);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Task added to ${c.dim(id)}${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`);
+        break;
+      }
+
+      case "done": {
+        const { flags, positional } = parseWriteArgs(args);
+        const taskId = positional[0];
+        if (!taskId) usageError(`error: missing required argument\n  command: loom done\n\n  hint: loom done <TASK_ID>`);
+        if (flags.dryRun) { spin.stop(); info(`Would mark task ${c.dim(taskId)} as done`); break; }
+        const result = await client.approveTask(taskId);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Marked task ${c.dim(taskId)} as ${c.green("done")}`);
+        break;
+      }
+
+      case "delete-task": {
+        const { flags, positional } = parseWriteArgs(args);
+        const taskId = positional[0];
+        if (!taskId) usageError(`error: missing required argument\n  command: loom delete-task\n\n  hint: loom delete-task <TASK_ID> --force`);
+        if (!flags.force) usageError(`error: --force required for delete-task\n\n  hint: loom delete-task <TASK_ID> --force`);
+        if (!flags.yes) {
+          const ok = await confirm(`Delete task ${c.dim(taskId)}?`);
+          if (!ok) { spin.stop(); info("Aborted."); break; }
+        }
+        if (flags.dryRun) { spin.stop(); info(`Would delete task ${c.dim(taskId)}`); break; }
+        const result = await client.deleteTask(taskId);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Deleted task ${c.dim(taskId)}`);
+        break;
+      }
+
+      case "create-folder": {
+        const { flags, positional } = parseWriteArgs(args);
+        const name = positional.join(" ");
+        if (!name) usageError(`error: missing required argument\n  command: loom create-folder\n\n  hint: loom create-folder <NAME>`);
+        if (flags.dryRun) { spin.stop(); info(`Would create folder ${c.bold(name)}`); break; }
+        const result = await client.createFolder(name);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Created folder ${c.bold(name)}`);
+        break;
+      }
+
+      case "rename-folder": {
+        const { flags, positional } = parseWriteArgs(args);
+        const folderId = positional[0];
+        const name = positional.slice(1).join(" ");
+        if (!folderId) usageError(`error: missing required argument\n  command: loom rename-folder\n\n  hint: loom rename-folder <FOLDER_ID> <NAME>`);
+        if (!name) usageError(`error: missing required argument\n  command: loom rename-folder\n\n  hint: loom rename-folder <FOLDER_ID> <NAME>`);
+        if (flags.dryRun) { spin.stop(); info(`Would rename folder ${c.dim(folderId)} to ${c.bold(name)}`); break; }
+        const result = await client.renameFolder(folderId, name);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Renamed folder ${c.dim(folderId)} → ${c.bold(name)}`);
+        break;
+      }
+
+      case "delete-folder": {
+        const { flags, positional } = parseWriteArgs(args);
+        const ids = positional.filter(Boolean);
+        if (ids.length === 0) usageError(`error: missing required argument\n  command: loom delete-folder\n\n  hint: loom delete-folder <ID> [ID...] --force`);
+        if (!flags.force) usageError(`error: --force required for delete-folder\n\n  hint: loom delete-folder <ID> [ID...] --force`);
+        if (!flags.yes) {
+          const ok = await confirm(`Delete ${ids.length} folder(s)?`);
+          if (!ok) { spin.stop(); info("Aborted."); break; }
+        }
+        if (flags.dryRun) { spin.stop(); info(`Would delete ${ids.length} folder(s): ${ids.map(i => c.dim(i)).join(", ")}`); break; }
+        const result = await client.deleteFolders(ids);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Deleted ${ids.length} folder(s)`);
+        break;
+      }
+
+      case "move": {
+        const { flags, positional } = parseWriteArgs(args, ["--to"]);
+        const ids = positional.map(parseId).filter(Boolean);
+        const toFolder = flags.to;
+        if (ids.length === 0) usageError(`error: missing required argument\n  command: loom move\n\n  hint: loom move <ID> [ID...] --to <FOLDER_ID>`);
+        if (!toFolder) usageError(`error: --to <FOLDER_ID> required\n\n  hint: loom move <ID> [ID...] --to <FOLDER_ID>`);
+        if (ids.length > 1 && !flags.yes) {
+          const ok = await confirm(`Move ${ids.length} videos to folder ${c.dim(toFolder)}?`);
+          if (!ok) { spin.stop(); info("Aborted."); break; }
+        }
+        if (flags.dryRun) { spin.stop(); info(`Would move ${ids.length} video(s) to folder ${c.dim(toFolder)}`); break; }
+        const result = await client.bulkMoveVideos(ids, toFolder);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Moved ${ids.length} video(s) to folder ${c.dim(toFolder)}`);
+        break;
+      }
+
+      case "follow": case "unfollow": {
+        const isFollow = command === "follow";
+        const { flags, positional } = parseWriteArgs(args);
+        const id = parseId(positional[0]);
+        needsId(id, command);
+        if (flags.dryRun) { spin.stop(); info(`Would ${command} ${c.dim(id)}`); break; }
+        const result = await client.toggleFollowing(id, isFollow);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`${isFollow ? "Following" : "Unfollowed"} ${c.dim(id)}`);
+        break;
+      }
+
       default: {
         const suggestion = suggest(command, Object.keys(COMMANDS));
         let msg = `error: unknown command "${command}"`;
@@ -631,6 +971,7 @@ async function main() {
         usageError(msg);
       }
     }
+    spin.stop();
   } catch (err) {
     spin.stop();
     const msg = err.message || String(err);

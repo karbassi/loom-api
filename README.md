@@ -55,6 +55,53 @@ loom whoami                      # check auth status
 loom dump <id>                   # all data as JSON
 ```
 
+### Write commands
+
+```sh
+# Video
+loom rename <id> "New Title"     # rename a video
+loom edit-description <id> "..." # edit description
+loom archive <id> [id...]        # archive video(s)
+loom unarchive <id> [id...]      # unarchive video(s)
+loom delete <id> --force         # permanently delete
+loom recover <id>                # recover deleted video
+loom duplicate <id>              # duplicate a video
+loom pin <id>                    # pin a video
+loom unpin <id>                  # unpin a video
+
+# Comments & Tasks
+loom comment <id> "text" [--at SEC]   # add a comment
+loom delete-comment <id> --force      # delete a comment
+loom add-task <id> "text" [--at SEC]  # add an action item
+loom done <taskId>                    # mark task as done
+loom delete-task <taskId> --force     # delete a task
+
+# Folders
+loom create-folder "Name"             # create a folder
+loom rename-folder <folderId> "Name"  # rename a folder
+loom delete-folder <id> [id...] --force  # delete folder(s)
+loom move <id> [id...] --to <folderId>   # move to folder
+
+# Follow
+loom follow <id>                 # follow a video
+loom unfollow <id>               # unfollow a video
+```
+
+### Safety model
+
+Write commands use a 3-tier safety model:
+
+- **Safe** — executes immediately (rename, pin, comment, etc.)
+- **Soft-destructive** — confirms if bulk (>1 item): `archive`, `move`. Skip with `--yes`
+- **Destructive** — requires `--force`, then confirms: `delete`, `delete-comment`, `delete-task`, `delete-folder`. Skip confirmation with `--yes`
+
+All write commands support `--dry-run` to preview without executing:
+
+```sh
+loom rename abc123 "New Title" --dry-run
+loom delete abc123 --force --dry-run
+```
+
 Anywhere `<id>` is accepted, you can paste a full Loom URL:
 
 ```sh
