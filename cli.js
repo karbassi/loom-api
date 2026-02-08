@@ -52,12 +52,33 @@ const COMMANDS = {
                  examples: ['eval "$(loom completions zsh)"', "loom completions fish > ~/.config/fish/completions/loom.fish"] },
 };
 
-const KNOWN_FLAGS = new Set(["--json", "--all", "--help", "--version", "-h", "-V", "-n"]);
+const KNOWN_FLAGS = new Set(["--json", "--all", "--help", "--version", "--no-color", "-h", "-V", "-n"]);
+
+// --- Color ---
+
+const useColor = (() => {
+  const argv = process.argv;
+  if (argv.includes("--no-color")) return false;
+  if (process.env.NO_COLOR !== undefined) return false;
+  if (process.env.FORCE_COLOR !== undefined) return true;
+  if (process.env.TERM === "dumb") return false;
+  return process.stdout.isTTY === true;
+})();
+
+const c = useColor
+  ? { red: s => `\x1b[31m${s}\x1b[0m`, green: s => `\x1b[32m${s}\x1b[0m`,
+      yellow: s => `\x1b[33m${s}\x1b[0m`, cyan: s => `\x1b[36m${s}\x1b[0m`,
+      bold: s => `\x1b[1m${s}\x1b[0m`, dim: s => `\x1b[2m${s}\x1b[0m` }
+  : { red: s => s, green: s => s, yellow: s => s, cyan: s => s, bold: s => s, dim: s => s };
 
 // --- Output helpers ---
 
 function die(msg, code = 1) {
-  console.error(msg);
+  // Colorize structured error messages: red "error:", dim "hint:"
+  const colored = msg
+    .replace(/^(error:)/m, c.red("$1"))
+    .replace(/^(  hint:)/m, c.dim("  hint:"));
+  console.error(colored);
   process.exit(code);
 }
 
@@ -116,8 +137,8 @@ function checkUnknownFlags(args) {
     if (a.startsWith("-") && !KNOWN_FLAGS.has(a) && !/^-\d+$/.test(a)) {
       const suggestion = suggest(a, [...KNOWN_FLAGS]);
       let msg = `error: unknown flag "${a}"`;
-      if (suggestion) msg += `\n\n  Did you mean "${suggestion}"?`;
-      msg += `\n\n  hint: Run "loom help" for available options.`;
+      if (suggestion) msg += `\n\n  Did you mean ${c.cyan(suggestion)}?`;
+      msg += `\n\n  hint: Run ${c.cyan('"loom help"')} for available options.`;
       usageError(msg);
     }
   }
@@ -130,10 +151,10 @@ function resolveAuth() {
 
   if (!fs.existsSync(AUTH_FILE)) {
     die(
-      `error: no auth found\n  path: ${AUTH_FILE}\n\n` +
+      `error: no auth found\n  ${c.dim("path:")} ${AUTH_FILE}\n\n` +
       `  hint: Either:\n` +
-      `    export LOOM_COOKIE="connect.sid=..."  (from browser DevTools)\n` +
-      `    Run "node login.js" to create auth.json`
+      `    ${c.cyan('export LOOM_COOKIE="connect.sid=..."')}  (from browser DevTools)\n` +
+      `    Run ${c.cyan('"node login.js"')} to create auth.json`
     );
   }
 
@@ -141,14 +162,14 @@ function resolveAuth() {
   const sid = state.cookies?.find((c) => c.name === "connect.sid");
   if (!sid) {
     die(
-      `error: no connect.sid cookie in auth file\n  path: ${AUTH_FILE}\n\n` +
-      `  hint: Re-run "node login.js" to capture a fresh session.`
+      `error: no connect.sid cookie in auth file\n  ${c.dim("path:")} ${AUTH_FILE}\n\n` +
+      `  hint: Re-run ${c.cyan('"node login.js"')} to capture a fresh session.`
     );
   }
   if (sid.expires && sid.expires * 1000 < Date.now()) {
     die(
-      `error: session expired\n  expired: ${new Date(sid.expires * 1000).toLocaleDateString()}\n\n` +
-      `  hint: Run "node refresh.js" to extend, or "node login.js" for a fresh session.`
+      `error: session expired\n  ${c.dim("expired:")} ${new Date(sid.expires * 1000).toLocaleDateString()}\n\n` +
+      `  hint: Run ${c.cyan('"node refresh.js"')} to extend, or ${c.cyan('"node login.js"')} for a fresh session.`
     );
   }
 
@@ -195,36 +216,37 @@ function needsId(id, command) {
 // --- Help ---
 
 function showHelp() {
-  console.log(`Loom CLI — query Loom videos from the command line
+  console.log(`${c.bold("Loom CLI")} — query Loom videos from the command line
 
-USAGE
+${c.bold("USAGE")}
   loom <command> [args] [--json]
 
-COMMANDS`);
+${c.bold("COMMANDS")}`);
   for (const [cmd, { desc }] of Object.entries(COMMANDS)) {
-    console.log(`  ${cmd.padEnd(14)} ${desc}`);
+    console.log(`  ${c.cyan(cmd.padEnd(14))} ${desc}`);
   }
   console.log(`
-OPTIONS
+${c.bold("OPTIONS")}
   --json         Output raw JSON (pipe to jq)
-  -n <COUNT>     Limit results (for list) [default: 20]
+  -n ${c.dim("<COUNT>")}     Limit results (for list) ${c.dim("[default: 20]")}
   --all          Show all results (for list)
+  --no-color     Disable color output
   -h, --help     Show help
   -V, --version  Show version
 
-EXAMPLES
-  loom list -n 5
-  loom video https://www.loom.com/share/abc123...
-  loom search "onboarding walkthrough"
-  loom transcript abc123 | pbcopy
-  loom list --json | jq '.[].name'
-  loom dump abc123 > meeting.json
+${c.bold("EXAMPLES")}
+  ${c.dim("$")} loom list -n 5
+  ${c.dim("$")} loom video https://www.loom.com/share/abc123...
+  ${c.dim("$")} loom search "onboarding walkthrough"
+  ${c.dim("$")} loom transcript abc123 | pbcopy
+  ${c.dim("$")} loom list --json | jq '.[].name'
+  ${c.dim("$")} loom dump abc123 > meeting.json
 
-ENVIRONMENT
-  LOOM_COOKIE      connect.sid cookie value [from browser DevTools]
-  LOOM_AUTH_FILE   path to auth.json [default: ../auth.json]
+${c.bold("ENVIRONMENT")}
+  LOOM_COOKIE      connect.sid cookie value ${c.dim("[from browser DevTools]")}
+  LOOM_AUTH_FILE   path to auth.json ${c.dim("[default: ../auth.json]")}
 
-LEARN MORE
+${c.bold("LEARN MORE")}
   loom <command> --help`);
 }
 
@@ -233,12 +255,12 @@ function showCommandHelp(command) {
   if (!cmd) return false;
   console.log(`${cmd.desc}
 
-USAGE
+${c.bold("USAGE")}
   ${cmd.usage} [--json]`);
   if (cmd.examples?.length) {
-    console.log(`\nEXAMPLES`);
+    console.log(`\n${c.bold("EXAMPLES")}`);
     for (const ex of cmd.examples) {
-      console.log(`  ${ex}`);
+      console.log(`  ${c.dim("$")} ${ex}`);
     }
   }
   return true;
@@ -334,14 +356,15 @@ async function main() {
         const video = videos[0];
         const v = await client.getVideo(video.id);
         const owner = v.owner || {};
-        console.log(`Logged in as: ${owner.display_name || "unknown"} (user ${owner.id || "?"})`);
+        console.log(`${c.dim("Logged in as:")} ${c.bold(owner.display_name || "unknown")} ${c.dim(`(user ${owner.id || "?"})`)}`);
         if (sid?.expires) {
           const daysLeft = ((sid.expires * 1000 - Date.now()) / 86400000).toFixed(1);
-          console.log(`Session expires in ${daysLeft} days`);
+          const color = daysLeft < 5 ? c.yellow : c.green;
+          console.log(`${c.dim("Session:")}     ${color(`expires in ${daysLeft} days`)}`);
         } else {
-          console.log(`Auth: LOOM_COOKIE`);
+          console.log(`${c.dim("Auth:")}        LOOM_COOKIE`);
         }
-        console.log(`Videos: ${(await client.getAllVideos()).length}`);
+        console.log(`${c.dim("Videos:")}      ${(await client.getAllVideos()).length}`);
         break;
       }
       case "search": {
@@ -351,7 +374,7 @@ async function main() {
         if (results.length === 0) { info("No results."); return; }
         if (jsonMode) return console.log(JSON.stringify(results, null, 2));
         for (const v of results) {
-          console.log(`${v.id}  ${v.name}`);
+          console.log(`${c.dim(v.id)}  ${v.name}`);
         }
         break;
       }
@@ -375,9 +398,9 @@ async function main() {
         if (videos.length === 0) { info("No videos."); return; }
         if (jsonMode) return console.log(JSON.stringify(videos, null, 2));
         for (const v of videos) {
-          console.log(`${v.id}  ${v.name}`);
+          console.log(`${c.dim(v.id)}  ${v.name}`);
         }
-        info(`\n${videos.length} videos` + (limit !== Infinity ? '  (use "loom list --all" for everything)' : ""));
+        info(`\n${c.dim(`${videos.length} videos`)}` + (limit !== Infinity ? c.dim('  (use "loom list --all" for everything)') : ""));
         break;
       }
       case "video": {
@@ -386,15 +409,15 @@ async function main() {
         if (jsonMode) return console.log(JSON.stringify(v, null, 2));
         const owner = (v.owner || {}).display_name || "unknown";
         const views = (v.views || {}).total || 0;
-        console.log(v.name);
-        console.log(`  Duration:    ${fmtDuration(v.playable_duration)}`);
-        console.log(`  Created:     ${fmtDate(v.createdAt)}`);
-        console.log(`  Owner:       ${owner}`);
-        console.log(`  Views:       ${views}`);
-        console.log(`  Comments:    ${v.totalComments || 0}`);
-        console.log(`  Reactions:   ${v.totalReactions || 0}`);
-        if (v.tags?.length) console.log(`  Tags:        ${v.tags.join(", ")}`);
-        console.log(`  URL:         https://www.loom.com/share/${v.id}`);
+        console.log(c.bold(v.name));
+        console.log(`  ${c.dim("Duration:")}    ${fmtDuration(v.playable_duration)}`);
+        console.log(`  ${c.dim("Created:")}     ${fmtDate(v.createdAt)}`);
+        console.log(`  ${c.dim("Owner:")}       ${owner}`);
+        console.log(`  ${c.dim("Views:")}       ${views}`);
+        console.log(`  ${c.dim("Comments:")}    ${v.totalComments || 0}`);
+        console.log(`  ${c.dim("Reactions:")}   ${v.totalReactions || 0}`);
+        if (v.tags?.length) console.log(`  ${c.dim("Tags:")}        ${v.tags.join(", ")}`);
+        console.log(`  ${c.dim("URL:")}         ${c.cyan(`https://www.loom.com/share/${v.id}`)}`);
         break;
       }
       case "transcript": {
@@ -444,11 +467,11 @@ async function main() {
         const comments = await client.getComments(videoId);
         if (comments.length === 0) { info("No comments."); return; }
         if (jsonMode) return console.log(JSON.stringify(comments, null, 2));
-        for (const c of comments) {
-          const ts = c.time_stamp != null ? ` @${fmtDuration(c.time_stamp)}` : "";
-          console.log(`[${c.user_name}${ts}] ${c.content}`);
-          for (const r of c.children_comments || []) {
-            console.log(`  └─ [${r.user_name}] ${r.content}`);
+        for (const cm of comments) {
+          const ts = cm.time_stamp != null ? c.dim(` @${fmtDuration(cm.time_stamp)}`) : "";
+          console.log(`[${c.bold(cm.user_name)}${ts}] ${cm.content}`);
+          for (const r of cm.children_comments || []) {
+            console.log(`  └─ [${c.bold(r.user_name)}] ${r.content}`);
           }
         }
         break;
@@ -460,9 +483,9 @@ async function main() {
         if (jsonMode) return console.log(JSON.stringify(tasks, null, 2));
         for (const t of tasks) {
           const owner = t.owner?.display_name || "Unassigned";
-          const ts = t.time_stamp != null ? ` @${fmtDuration(t.time_stamp)}` : "";
-          const status = t.resolved_at ? "done" : "open";
-          console.log(`[${status}] [${owner}${ts}] ${t.content}`);
+          const ts = t.time_stamp != null ? c.dim(` @${fmtDuration(t.time_stamp)}`) : "";
+          const status = t.resolved_at ? c.green("done") : c.yellow("open");
+          console.log(`[${status}] [${c.bold(owner)}${ts}] ${t.content}`);
         }
         break;
       }
@@ -474,8 +497,8 @@ async function main() {
         for (const r of reactions) {
           const user = r.user?.display_name || r.anon_user_name || "Anonymous";
           const emoji = r.extended_reaction || r.reaction || "";
-          const ts = r.time != null ? ` @${fmtDuration(r.time)}` : "";
-          console.log(`[${user}${ts}] ${emoji}`);
+          const ts = r.time != null ? c.dim(` @${fmtDuration(r.time)}`) : "";
+          console.log(`[${c.bold(user)}${ts}] ${emoji}`);
         }
         break;
       }
@@ -498,9 +521,9 @@ async function main() {
         if (allFolders.length === 0) { info("No folders."); return; }
         if (jsonMode) return console.log(JSON.stringify(allFolders, null, 2));
         for (const f of allFolders) {
-          console.log(`${f.id}  ${f.name}  (${f.visibility || "unknown"})`);
+          console.log(`${c.dim(f.id)}  ${f.name}  ${c.dim(`(${f.visibility || "unknown"})`)}`);
         }
-        info(`\n${allFolders.length} folders`);
+        info(`\n${c.dim(`${allFolders.length} folders`)}`);
         break;
       }
       case "spaces": {
@@ -515,10 +538,10 @@ async function main() {
         if (allSpaces.length === 0) { info("No spaces."); return; }
         if (jsonMode) return console.log(JSON.stringify(allSpaces, null, 2));
         for (const s of allSpaces) {
-          const primary = s.is_primary ? " (primary)" : "";
-          console.log(`${s.id}  ${s.name}  [${s.privacy || "unknown"}]${primary}`);
+          const primary = s.is_primary ? c.dim(" (primary)") : "";
+          console.log(`${c.dim(s.id)}  ${s.name}  ${c.dim(`[${s.privacy || "unknown"}]`)}${primary}`);
         }
-        info(`\n${allSpaces.length} spaces`);
+        info(`\n${c.dim(`${allSpaces.length} spaces`)}`);
         break;
       }
       case "backlinks": {
@@ -527,7 +550,7 @@ async function main() {
         if (backlinks.length === 0) { info("No backlinks."); return; }
         if (jsonMode) return console.log(JSON.stringify(backlinks, null, 2));
         for (const b of backlinks) {
-          console.log(`[${b.source}] ${b.title || "Untitled"} — ${b.sourceLink || ""}`);
+          console.log(`${c.dim(`[${b.source}]`)} ${b.title || "Untitled"} — ${c.cyan(b.sourceLink || "")}`);
         }
         break;
       }
@@ -544,11 +567,11 @@ async function main() {
         const user = await client.getUserById(videoId);
         if (!user) { info("User not found."); return; }
         if (jsonMode) return console.log(JSON.stringify(user, null, 2));
-        console.log(user.display_name);
-        if (user.email) console.log(`  Email:    ${user.email}`);
-        if (user.company_name) console.log(`  Company:  ${user.company_name}`);
-        if (user.companyPosition) console.log(`  Role:     ${user.companyPosition}`);
-        console.log(`  ID:       ${user.id}`);
+        console.log(c.bold(user.display_name));
+        if (user.email) console.log(`  ${c.dim("Email:")}    ${user.email}`);
+        if (user.company_name) console.log(`  ${c.dim("Company:")}  ${user.company_name}`);
+        if (user.companyPosition) console.log(`  ${c.dim("Role:")}     ${user.companyPosition}`);
+        console.log(`  ${c.dim("ID:")}       ${c.dim(user.id)}`);
         break;
       }
       case "open": {
@@ -556,7 +579,7 @@ async function main() {
         const url = `https://www.loom.com/share/${videoId}`;
         const { exec } = await import("child_process");
         exec(`open "${url}"`);
-        console.log(url);
+        console.log(c.cyan(url));
         break;
       }
       case "dump": {
@@ -584,8 +607,8 @@ async function main() {
       default: {
         const suggestion = suggest(command, Object.keys(COMMANDS));
         let msg = `error: unknown command "${command}"`;
-        if (suggestion) msg += `\n\n  Did you mean "${suggestion}"?`;
-        msg += `\n\n  hint: Run "loom help" for a list of commands.`;
+        if (suggestion) msg += `\n\n  Did you mean ${c.cyan(`"${suggestion}"`)}?`;
+        msg += `\n\n  hint: Run ${c.cyan('"loom help"')} for a list of commands.`;
         usageError(msg);
       }
     }
@@ -595,7 +618,7 @@ async function main() {
     if (msg.includes("403") || msg.includes("401") || msg.includes("Unauthorized")) {
       die(
         `error: authentication failed\n\n` +
-        `  hint: Session may have expired. Run "node refresh.js" or "node login.js".`
+        `  hint: Session may have expired. Run ${c.cyan('"node refresh.js"')} or ${c.cyan('"node login.js"')}.`
       );
     }
     die(`error: ${msg}`);
