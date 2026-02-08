@@ -88,18 +88,24 @@ loom completions fish > ~/.config/fish/completions/loom.fish
 
 Output is colorized when stdout is a terminal (dim IDs, bold titles, colored status). Color is automatically disabled when piping.
 
-To disable color explicitly:
-
 ```sh
-loom list --no-color
-# or
-NO_COLOR=1 loom list
+loom list --color=always      # force color (even when piped)
+loom list --color=never       # disable color
+loom list --color=auto        # auto-detect (default)
+loom list --no-color          # alias for --color=never
 ```
 
-To force color when piping (e.g. to `less -R`):
+Detection precedence: `--color` flag > `--no-color` > `NO_COLOR` env > `FORCE_COLOR` env > `TERM=dumb` > TTY check.
+
+### Pager
+
+Long output (transcripts, captions, dumps, large lists) is automatically paged through `less -RFX` when running in a terminal. Short output passes through directly.
+
+Override the pager with `$PAGER`:
 
 ```sh
-FORCE_COLOR=1 loom list | less -R
+PAGER="more" loom transcript <id>
+PAGER="" loom transcript <id>         # disable pager
 ```
 
 ### Per-command help
