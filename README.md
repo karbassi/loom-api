@@ -1,12 +1,22 @@
 # Loom CLI
 
-Command-line interface for Loom's internal GraphQL API. No public API exists — this uses cookie-based auth from a captured browser session.
+Command-line interface for Loom's internal GraphQL API. Zero dependencies — runs on Bun.
 
 ## Setup
 
-1. **Get `auth.json`** — run `node login.js` from the [parent repo](../) to open a browser, log in to Loom, and save the session cookies.
+### Option A: Cookie from browser (quickest)
 
-2. **Point to it** — the CLI looks for `../auth.json` by default. Override with:
+1. Open Loom in your browser, open DevTools → Application → Cookies
+2. Copy the `connect.sid` value
+3. Export it:
+   ```sh
+   export LOOM_COOKIE="connect.sid=s%3A..."
+   ```
+
+### Option B: Auth file
+
+1. Run `node login.js` from the [parent repo](../) to capture a browser session
+2. The CLI looks for `../auth.json` by default. Override with:
    ```sh
    export LOOM_AUTH_FILE=/path/to/auth.json
    ```
@@ -14,24 +24,45 @@ Command-line interface for Loom's internal GraphQL API. No public API exists —
 ## Usage
 
 ```sh
-node cli.js help                              # show all commands
-node cli.js list                              # list all videos
-node cli.js search how to set up screening    # semantic search
-node cli.js video <id>                        # video metadata
-node cli.js transcript <id>                   # full transcript
-node cli.js captions <id>                     # WebVTT captions
-node cli.js download <id>                     # signed MP4 URL
-node cli.js chapters <id>                     # AI chapters
-node cli.js summary <id>                      # AI summary
-node cli.js comments <id>                     # comments
-node cli.js tasks <id>                        # action items
-node cli.js reactions <id>                    # emoji reactions
-node cli.js notes <id>                        # meeting notes URL
-node cli.js folders                           # list folders
-node cli.js spaces                            # list spaces
-node cli.js backlinks <id>                    # external references
-node cli.js user <userId>                     # user profile
-node cli.js dump <id>                         # all data as JSON
+loom list                        # recent 20 videos
+loom list --all                  # all videos
+loom list -n 5                   # last 5 videos
+loom search onboarding           # semantic search
+loom video <id>                  # video details
+loom transcript <id>             # full transcript
+loom captions <id>               # WebVTT captions
+loom download <id>               # signed MP4 URL
+loom chapters <id>               # AI chapters
+loom summary <id>                # AI summary
+loom description <id>            # AI description
+loom comments <id>               # comments + replies
+loom tasks <id>                  # action items
+loom reactions <id>              # emoji reactions
+loom notes <id>                  # meeting notes URL
+loom folders                     # list folders
+loom spaces                      # list spaces
+loom backlinks <id>              # external references
+loom tags <id>                   # video tags
+loom user <userId>               # user profile
+loom open <id>                   # open in browser
+loom whoami                      # check auth status
+loom dump <id>                   # all data as JSON
+```
+
+Anywhere `<id>` is accepted, you can paste a full Loom URL instead:
+
+```sh
+loom video https://www.loom.com/share/abc123def456...
+```
+
+### JSON output
+
+Append `--json` to any command for structured output:
+
+```sh
+loom list --json | jq '.[].name'
+loom video <id> --json | jq '.views'
+loom comments <id> --json
 ```
 
 ## Auth errors
@@ -39,3 +70,8 @@ node cli.js dump <id>                         # all data as JSON
 If you get auth errors, your session has expired (~30 days). Either:
 - Run `node refresh.js` from the parent repo (headless, extends the session)
 - Run `node login.js` from the parent repo (opens browser for fresh login)
+
+## Requirements
+
+- [Bun](https://bun.sh) runtime
+- No npm dependencies
