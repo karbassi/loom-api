@@ -24,6 +24,7 @@ const COMMANDS = {
   backlinks: "Get backlinks <videoId>",
   tags: "Get tags <videoId>",
   user: "Get user profile <userId>",
+  open: "Open video in browser <videoId>",
   whoami: "Check auth status",
   dump: "Dump all data for a video <videoId>",
 };
@@ -82,8 +83,28 @@ function fmtDate(iso) {
   });
 }
 
+function fmtRelative(iso) {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+function parseId(input) {
+  if (!input) return null;
+  const m = input.match(/loom\.com\/(?:share|looms)\/([a-f0-9]{32})/);
+  return m ? m[1] : input;
+}
+
 function needsId(id, command) {
-  if (!id) die(`Usage: loom ${command} <videoId>`);
+  if (!id) die(`Usage: loom ${command} <videoId or URL>`);
 }
 
 async function main() {
@@ -95,13 +116,19 @@ async function main() {
     for (const [cmd, desc] of Object.entries(COMMANDS)) {
       console.log(`  ${cmd.padEnd(14)} ${desc}`);
     }
-    console.log(`\nAuth: LOOM_COOKIE env, or ${AUTH_FILE}`);
+    console.log(`\nOptions:`);
+    console.log(`  --json       Output raw JSON (pipe to jq)`);
+    console.log(`\nVideo IDs or Loom URLs accepted (e.g. https://www.loom.com/share/abc123)`);
+    console.log(`Auth: LOOM_COOKIE env, or ${AUTH_FILE}`);
     return;
   }
 
+  const jsonMode = args.includes("--json");
+  const filteredArgs = args.filter((a) => a !== "--json");
+
   const { cookies, sid } = resolveAuth();
   const client = new LoomClient(cookies);
-  const videoId = args[0];
+  const videoId = parseId(filteredArgs[0]);
 
   try {
     switch (command) {
@@ -121,10 +148,11 @@ async function main() {
         break;
       }
       case "search": {
-        const q = args.join(" ");
+        const q = filteredArgs.join(" ");
         if (!q) die("Usage: loom search <query>");
         const results = await client.searchVideos(q);
         if (results.length === 0) return console.log("No results.");
+        if (jsonMode) return console.log(JSON.stringify(results, null, 2));
         for (const v of results) {
           console.log(`  ${v.id}  ${v.name}`);
         }
@@ -132,11 +160,11 @@ async function main() {
       }
       case "list": {
         let limit = 20;
-        const nIdx = args.indexOf("-n");
-        if (nIdx !== -1 && args[nIdx + 1]) {
-          limit = parseInt(args[nIdx + 1], 10) || 20;
+        const nIdx = filteredArgs.indexOf("-n");
+        if (nIdx !== -1 && filteredArgs[nIdx + 1]) {
+          limit = parseInt(filteredArgs[nIdx + 1], 10) || 20;
         }
-        if (args[0] === "all" || args[0] === "--all") limit = Infinity;
+        if (filteredArgs[0] === "all" || filteredArgs[0] === "--all") limit = Infinity;
 
         const videos = [];
         let cursor = null;
@@ -148,6 +176,7 @@ async function main() {
           cursor = result.endCursor;
         }
         if (videos.length === 0) return console.log("No videos.");
+        if (jsonMode) return console.log(JSON.stringify(videos, null, 2));
         for (const v of videos) {
           console.log(`  ${v.id}  ${v.name}`);
         }
@@ -158,6 +187,7 @@ async function main() {
       case "video": {
         needsId(videoId, "video");
         const v = await client.getVideo(videoId);
+        if (jsonMode) return console.log(JSON.stringify(v, null, 2));
         const owner = (v.owner || {}).display_name || "unknown";
         const views = (v.views || {}).total || 0;
         console.log(v.name);
@@ -168,7 +198,7 @@ async function main() {
         console.log(`  Comments:    ${v.totalComments || 0}`);
         console.log(`  Reactions:   ${v.totalReactions || 0}`);
         if (v.tags?.length) console.log(`  Tags:        ${v.tags.join(", ")}`);
-        console.log(`  ID:          ${v.id}`);
+        console.log(`  URL:         https://www.loom.com/share/${v.id}`);
         break;
       }
       case "transcript": {
@@ -217,6 +247,7 @@ async function main() {
         needsId(videoId, "comments");
         const comments = await client.getComments(videoId);
         if (comments.length === 0) return console.log("No comments.");
+        if (jsonMode) return console.log(JSON.stringify(comments, null, 2));
         for (const c of comments) {
           const ts = c.time_stamp != null ? ` @${fmtDuration(c.time_stamp)}` : "";
           console.log(`[${c.user_name}${ts}] ${c.content}`);
@@ -230,6 +261,7 @@ async function main() {
         needsId(videoId, "tasks");
         const tasks = await client.getTasks(videoId);
         if (tasks.length === 0) return console.log("No action items.");
+        if (jsonMode) return console.log(JSON.stringify(tasks, null, 2));
         for (const t of tasks) {
           const owner = t.owner?.display_name || "Unassigned";
           const ts = t.time_stamp != null ? ` @${fmtDuration(t.time_stamp)}` : "";
@@ -242,6 +274,7 @@ async function main() {
         needsId(videoId, "reactions");
         const reactions = await client.getReactions(videoId);
         if (reactions.length === 0) return console.log("No reactions.");
+        if (jsonMode) return console.log(JSON.stringify(reactions, null, 2));
         for (const r of reactions) {
           const user = r.user?.display_name || r.anon_user_name || "Anonymous";
           const emoji = r.extended_reaction || r.reaction || "";
@@ -267,6 +300,7 @@ async function main() {
           folderCursor = r.endCursor;
         }
         if (allFolders.length === 0) return console.log("No folders.");
+        if (jsonMode) return console.log(JSON.stringify(allFolders, null, 2));
         for (const f of allFolders) {
           console.log(`  ${f.id}  ${f.name}  (${f.visibility || "unknown"})`);
         }
@@ -283,6 +317,7 @@ async function main() {
           spaceCursor = r.endCursor;
         }
         if (allSpaces.length === 0) return console.log("No spaces.");
+        if (jsonMode) return console.log(JSON.stringify(allSpaces, null, 2));
         for (const s of allSpaces) {
           const primary = s.is_primary ? " (primary)" : "";
           console.log(`  ${s.id}  ${s.name}  [${s.privacy || "unknown"}]${primary}`);
@@ -315,6 +350,14 @@ async function main() {
         if (user.company_name) console.log(`  Company:  ${user.company_name}`);
         if (user.companyPosition) console.log(`  Role:     ${user.companyPosition}`);
         console.log(`  ID:       ${user.id}`);
+        break;
+      }
+      case "open": {
+        needsId(videoId, "open");
+        const url = `https://www.loom.com/share/${videoId}`;
+        const { exec } = await import("child_process");
+        exec(`open "${url}"`);
+        console.log(url);
         break;
       }
       case "dump": {
