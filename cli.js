@@ -85,9 +85,10 @@ const COMMANDS = {
   unfollow:        { desc: "Unfollow a video",            usage: "loom unfollow <ID>" },
 };
 
+const WRITE_ONLY_FLAGS = new Set(["--dry-run", "--yes", "-y", "--force", "-f", "--at", "--to"]);
 const KNOWN_FLAGS = new Set([
   "--json", "--all", "--help", "--version", "--no-color", "--color", "-h", "-V", "-n",
-  "--dry-run", "--yes", "-y", "--force", "-f", "--at", "--to",
+  ...WRITE_ONLY_FLAGS,
 ]);
 
 // --- Color ---
@@ -272,8 +273,11 @@ function needsId(id, command) {
 function parseWriteArgs(args, valueFlags = []) {
   const flags = { dryRun: false, yes: false, force: false, json: false };
   const positional = [];
+  let pastSeparator = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (!pastSeparator && a === "--") { pastSeparator = true; continue; }
+    if (pastSeparator) { positional.push(a); continue; }
     if (a === "--dry-run") flags.dryRun = true;
     else if (a === "--yes" || a === "-y") flags.yes = true;
     else if (a === "--force" || a === "-f") flags.force = true;
@@ -286,6 +290,12 @@ function parseWriteArgs(args, valueFlags = []) {
     }
   }
   return { flags, positional };
+}
+
+function dryRun(spin, flags, message, preview = {}) {
+  spin.stop();
+  if (flags.json) { console.log(JSON.stringify({ dry_run: true, ...preview }, null, 2)); }
+  else { info(message); }
 }
 
 async function confirm(message) {
@@ -429,7 +439,12 @@ async function main() {
   const [command, ...args] = process.argv.slice(2);
 
   // Global flags
-  if (!command || command === "help" || command === "--help" || command === "-h") {
+  if (!command || command === "--help" || command === "-h") {
+    showHelp();
+    return;
+  }
+  if (command === "help") {
+    if (args[0] && showCommandHelp(args[0])) return;
     showHelp();
     return;
   }
@@ -449,6 +464,16 @@ async function main() {
 
   // Check for unknown flags
   checkUnknownFlags(args);
+
+  // Reject write-only flags on read commands
+  if (READ_COMMANDS.has(command)) {
+    for (const a of args) {
+      if (a === "--") break;
+      if (WRITE_ONLY_FLAGS.has(a)) {
+        usageError(`error: flag "${a}" is only valid for write commands\n\n  hint: Run ${c.cyan(`"loom ${command} --help"`)} for usage.`);
+      }
+    }
+  }
 
   const jsonMode = args.includes("--json");
   const filteredArgs = args.filter((a) => a === "-n" || !a.startsWith("-"));
@@ -720,7 +745,7 @@ async function main() {
         const name = positional.slice(1).join(" ");
         needsId(id, "rename");
         if (!name) usageError(`error: missing required argument\n  command: loom rename\n\n  hint: loom rename <ID> <NAME>`);
-        if (flags.dryRun) { spin.stop(); info(`Would rename ${c.dim(id)} to ${c.bold(name)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would rename ${c.dim(id)} to ${c.bold(name)}`, { action: "rename", id, name }); break; }
         const result = await client.updateVideoName(id, name);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -734,7 +759,7 @@ async function main() {
         const text = positional.slice(1).join(" ");
         needsId(id, "edit-description");
         if (!text) usageError(`error: missing required argument\n  command: loom edit-description\n\n  hint: loom edit-description <ID> <TEXT>`);
-        if (flags.dryRun) { spin.stop(); info(`Would update description of ${c.dim(id)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would update description of ${c.dim(id)}`, { action: "edit-description", id, text }); break; }
         const result = await client.updateVideoDescription(id, text);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -751,7 +776,7 @@ async function main() {
           const ok = await confirm(`Archive ${ids.length} videos?`);
           if (!ok) { spin.stop(); info("Aborted."); break; }
         }
-        if (flags.dryRun) { spin.stop(); info(`Would ${command} ${ids.length} video(s): ${ids.map(i => c.dim(i)).join(", ")}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would ${command} ${ids.length} video(s): ${ids.map(i => c.dim(i)).join(", ")}`, { action: command, ids }); break; }
         const result = await client.archiveVideos(ids, isArchive);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -768,7 +793,7 @@ async function main() {
           const ok = await confirm(`Permanently delete ${c.dim(id)}?`);
           if (!ok) { spin.stop(); info("Aborted."); break; }
         }
-        if (flags.dryRun) { spin.stop(); info(`Would delete ${c.dim(id)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would delete ${c.dim(id)}`, { action: "delete", id }); break; }
         const result = await client.deleteVideo(id);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -780,7 +805,7 @@ async function main() {
         const { flags, positional } = parseWriteArgs(args);
         const id = parseId(positional[0]);
         needsId(id, "recover");
-        if (flags.dryRun) { spin.stop(); info(`Would recover ${c.dim(id)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would recover ${c.dim(id)}`, { action: "recover", id }); break; }
         const result = await client.recoverVideo(id);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -792,7 +817,7 @@ async function main() {
         const { flags, positional } = parseWriteArgs(args);
         const id = parseId(positional[0]);
         needsId(id, "duplicate");
-        if (flags.dryRun) { spin.stop(); info(`Would duplicate ${c.dim(id)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would duplicate ${c.dim(id)}`, { action: "duplicate", id }); break; }
         const result = await client.duplicateVideo(id);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -805,7 +830,7 @@ async function main() {
         const { flags, positional } = parseWriteArgs(args);
         const id = parseId(positional[0]);
         needsId(id, command);
-        if (flags.dryRun) { spin.stop(); info(`Would ${command} ${c.dim(id)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would ${command} ${c.dim(id)}`, { action: command, id }); break; }
         const result = await client.updateVideoPinStatus(id, isPinning);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -820,7 +845,8 @@ async function main() {
         needsId(id, "comment");
         if (!text) usageError(`error: missing required argument\n  command: loom comment\n\n  hint: loom comment <ID> <TEXT> [--at SEC]`);
         const timestamp = flags.at != null ? parseInt(flags.at, 10) : 0;
-        if (flags.dryRun) { spin.stop(); info(`Would comment on ${c.dim(id)}: "${text}"${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`); break; }
+        if (flags.at != null && isNaN(timestamp)) usageError(`error: --at must be a number (seconds)\n\n  hint: loom comment <ID> <TEXT> --at 30`);
+        if (flags.dryRun) { dryRun(spin, flags, `Would comment on ${c.dim(id)}: "${text}"${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`, { action: "comment", id, content: text, timestamp }); break; }
         const result = await client.createComment(id, text, timestamp);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -837,7 +863,7 @@ async function main() {
           const ok = await confirm(`Delete comment ${c.dim(commentId)}?`);
           if (!ok) { spin.stop(); info("Aborted."); break; }
         }
-        if (flags.dryRun) { spin.stop(); info(`Would delete comment ${c.dim(commentId)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would delete comment ${c.dim(commentId)}`, { action: "delete-comment", comment_id: commentId }); break; }
         const result = await client.deleteComment(commentId);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -852,7 +878,8 @@ async function main() {
         needsId(id, "add-task");
         if (!text) usageError(`error: missing required argument\n  command: loom add-task\n\n  hint: loom add-task <ID> <TEXT> [--at SEC]`);
         const timestamp = flags.at != null ? parseInt(flags.at, 10) : 0;
-        if (flags.dryRun) { spin.stop(); info(`Would add task to ${c.dim(id)}: "${text}"${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`); break; }
+        if (flags.at != null && isNaN(timestamp)) usageError(`error: --at must be a number (seconds)\n\n  hint: loom add-task <ID> <TEXT> --at 45`);
+        if (flags.dryRun) { dryRun(spin, flags, `Would add task to ${c.dim(id)}: "${text}"${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`, { action: "add-task", id, content: text, timestamp }); break; }
         const result = await client.createTask(id, text, timestamp);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -864,7 +891,7 @@ async function main() {
         const { flags, positional } = parseWriteArgs(args);
         const taskId = positional[0];
         if (!taskId) usageError(`error: missing required argument\n  command: loom done\n\n  hint: loom done <TASK_ID>`);
-        if (flags.dryRun) { spin.stop(); info(`Would mark task ${c.dim(taskId)} as done`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would mark task ${c.dim(taskId)} as done`, { action: "done", task_id: taskId }); break; }
         const result = await client.approveTask(taskId);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -881,7 +908,7 @@ async function main() {
           const ok = await confirm(`Delete task ${c.dim(taskId)}?`);
           if (!ok) { spin.stop(); info("Aborted."); break; }
         }
-        if (flags.dryRun) { spin.stop(); info(`Would delete task ${c.dim(taskId)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would delete task ${c.dim(taskId)}`, { action: "delete-task", task_id: taskId }); break; }
         const result = await client.deleteTask(taskId);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -893,7 +920,7 @@ async function main() {
         const { flags, positional } = parseWriteArgs(args);
         const name = positional.join(" ");
         if (!name) usageError(`error: missing required argument\n  command: loom create-folder\n\n  hint: loom create-folder <NAME>`);
-        if (flags.dryRun) { spin.stop(); info(`Would create folder ${c.bold(name)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would create folder ${c.bold(name)}`, { action: "create-folder", name }); break; }
         const result = await client.createFolder(name);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -907,7 +934,7 @@ async function main() {
         const name = positional.slice(1).join(" ");
         if (!folderId) usageError(`error: missing required argument\n  command: loom rename-folder\n\n  hint: loom rename-folder <FOLDER_ID> <NAME>`);
         if (!name) usageError(`error: missing required argument\n  command: loom rename-folder\n\n  hint: loom rename-folder <FOLDER_ID> <NAME>`);
-        if (flags.dryRun) { spin.stop(); info(`Would rename folder ${c.dim(folderId)} to ${c.bold(name)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would rename folder ${c.dim(folderId)} to ${c.bold(name)}`, { action: "rename-folder", folder_id: folderId, name }); break; }
         const result = await client.renameFolder(folderId, name);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -924,7 +951,7 @@ async function main() {
           const ok = await confirm(`Delete ${ids.length} folder(s)?`);
           if (!ok) { spin.stop(); info("Aborted."); break; }
         }
-        if (flags.dryRun) { spin.stop(); info(`Would delete ${ids.length} folder(s): ${ids.map(i => c.dim(i)).join(", ")}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would delete ${ids.length} folder(s): ${ids.map(i => c.dim(i)).join(", ")}`, { action: "delete-folder", ids }); break; }
         const result = await client.deleteFolders(ids);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -942,7 +969,7 @@ async function main() {
           const ok = await confirm(`Move ${ids.length} videos to folder ${c.dim(toFolder)}?`);
           if (!ok) { spin.stop(); info("Aborted."); break; }
         }
-        if (flags.dryRun) { spin.stop(); info(`Would move ${ids.length} video(s) to folder ${c.dim(toFolder)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would move ${ids.length} video(s) to folder ${c.dim(toFolder)}`, { action: "move", ids, to: toFolder }); break; }
         const result = await client.bulkMoveVideos(ids, toFolder);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
@@ -955,7 +982,7 @@ async function main() {
         const { flags, positional } = parseWriteArgs(args);
         const id = parseId(positional[0]);
         needsId(id, command);
-        if (flags.dryRun) { spin.stop(); info(`Would ${command} ${c.dim(id)}`); break; }
+        if (flags.dryRun) { dryRun(spin, flags, `Would ${command} ${c.dim(id)}`, { action: command, id }); break; }
         const result = await client.toggleFollowing(id, isFollow);
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
