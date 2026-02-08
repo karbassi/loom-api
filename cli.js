@@ -3,6 +3,8 @@ import fs from "fs";
 import path from "path";
 import { LoomClient } from "./loom.js";
 
+const VERSION = "1.0.0";
+
 // Load ../.env (no dependencies)
 const envPath = path.join(import.meta.dir, "..", ".env");
 if (fs.existsSync(envPath)) {
@@ -15,32 +17,63 @@ if (fs.existsSync(envPath)) {
 const AUTH_FILE = process.env.LOOM_AUTH_FILE || path.join(import.meta.dir, "..", "auth.json");
 
 const COMMANDS = {
-  list: "List recent videos (default 20, or -n COUNT)",
-  search: "Semantic search <query>",
-  video: "Get video details <videoId>",
-  transcript: "Get transcript as text <videoId>",
-  captions: "Get VTT captions <videoId>",
-  download: "Get download URL <videoId>",
-  chapters: "Get chapters <videoId>",
-  summary: "Get AI summary <videoId>",
-  description: "Get AI description <videoId>",
-  comments: "Get comments <videoId>",
-  tasks: "Get AI action items <videoId>",
-  reactions: "Get emoji reactions <videoId>",
-  notes: "Get meeting notes URL <videoId>",
-  folders: "List your folders",
-  spaces: "List your spaces",
-  backlinks: "Get backlinks <videoId>",
-  tags: "Get tags <videoId>",
-  user: "Get user profile <userId>",
-  open: "Open video in browser <videoId>",
-  whoami: "Check auth status",
-  dump: "Dump all data for a video <videoId>",
+  list:        { desc: "List recent videos",          usage: "loom list [-n COUNT | --all]" },
+  search:      { desc: "Semantic search",             usage: "loom search <query>" },
+  video:       { desc: "Get video details",           usage: "loom video <ID>" },
+  transcript:  { desc: "Get transcript as text",      usage: "loom transcript <ID>" },
+  captions:    { desc: "Get VTT captions",            usage: "loom captions <ID>" },
+  download:    { desc: "Get download URL",            usage: "loom download <ID>" },
+  chapters:    { desc: "Get chapters",                usage: "loom chapters <ID>" },
+  summary:     { desc: "Get AI summary",              usage: "loom summary <ID>" },
+  description: { desc: "Get AI description",          usage: "loom description <ID>" },
+  comments:    { desc: "Get comments and replies",    usage: "loom comments <ID>" },
+  tasks:       { desc: "Get action items",            usage: "loom tasks <ID>" },
+  reactions:   { desc: "Get emoji reactions",          usage: "loom reactions <ID>" },
+  notes:       { desc: "Get meeting notes URL",       usage: "loom notes <ID>" },
+  folders:     { desc: "List your folders",            usage: "loom folders" },
+  spaces:      { desc: "List your spaces",             usage: "loom spaces" },
+  backlinks:   { desc: "Get backlinks",               usage: "loom backlinks <ID>" },
+  tags:        { desc: "Get tags",                    usage: "loom tags <ID>" },
+  user:        { desc: "Get user profile",            usage: "loom user <userId>" },
+  open:        { desc: "Open video in browser",       usage: "loom open <ID>" },
+  whoami:      { desc: "Check auth status",           usage: "loom whoami" },
+  dump:        { desc: "Dump all data as JSON",       usage: "loom dump <ID>" },
+  completions: { desc: "Generate shell completions",  usage: "loom completions <bash|zsh|fish>" },
 };
 
-function die(msg) {
+// --- Output helpers ---
+
+function die(msg, code = 1) {
   console.error(msg);
-  process.exit(1);
+  process.exit(code);
+}
+
+function usageError(msg) {
+  die(msg, 2);
+}
+
+function suggest(input, candidates) {
+  let best = null, bestDist = Infinity;
+  for (const c of candidates) {
+    const d = levenshtein(input, c);
+    if (d < bestDist) { bestDist = d; best = c; }
+  }
+  return bestDist <= 3 ? best : null;
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) => i);
+  for (let j = 1; j <= n; j++) {
+    let prev = dp[0];
+    dp[0] = j;
+    for (let i = 1; i <= m; i++) {
+      const tmp = dp[i];
+      dp[i] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[i], dp[i - 1]);
+      prev = tmp;
+    }
+  }
+  return dp[m];
 }
 
 function resolveAuth() {
@@ -50,21 +83,25 @@ function resolveAuth() {
 
   if (!fs.existsSync(AUTH_FILE)) {
     die(
-      `No auth found. Either:\n` +
-      `  export LOOM_COOKIE="connect.sid=..."  (from browser DevTools)\n` +
-      `  Run "node login.js" to create ${AUTH_FILE}`
+      `error: no auth found\n  path: ${AUTH_FILE}\n\n` +
+      `  hint: Either:\n` +
+      `    export LOOM_COOKIE="connect.sid=..."  (from browser DevTools)\n` +
+      `    Run "node login.js" to create auth.json`
     );
   }
 
   const state = JSON.parse(fs.readFileSync(AUTH_FILE, "utf8"));
   const sid = state.cookies?.find((c) => c.name === "connect.sid");
   if (!sid) {
-    die(`No connect.sid cookie in ${AUTH_FILE}. Re-run "node login.js".`);
+    die(
+      `error: no connect.sid cookie in auth file\n  path: ${AUTH_FILE}\n\n` +
+      `  hint: Re-run "node login.js" to capture a fresh session.`
+    );
   }
   if (sid.expires && sid.expires * 1000 < Date.now()) {
     die(
-      `Session expired (${new Date(sid.expires * 1000).toLocaleDateString()}).\n\n` +
-      `Run "node refresh.js" to extend, or "node login.js" for a fresh session.`
+      `error: session expired\n  expired: ${new Date(sid.expires * 1000).toLocaleDateString()}\n\n` +
+      `  hint: Run "node refresh.js" to extend, or "node login.js" for a fresh session.`
     );
   }
 
@@ -75,6 +112,8 @@ function resolveAuth() {
 
   return { cookies, sid };
 }
+
+// --- Formatting ---
 
 function fmtDuration(secs) {
   if (!secs) return "0s";
@@ -92,20 +131,6 @@ function fmtDate(iso) {
   });
 }
 
-function fmtRelative(iso) {
-  if (!iso) return "";
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.floor(months / 12)}y ago`;
-}
-
 function parseId(input) {
   if (!input) return null;
   const m = input.match(/loom\.com\/(?:share|looms)\/([a-f0-9]{32})/);
@@ -113,23 +138,128 @@ function parseId(input) {
 }
 
 function needsId(id, command) {
-  if (!id) die(`Usage: loom ${command} <videoId or URL>`);
+  if (!id) usageError(
+    `error: missing required argument\n  command: loom ${command}\n\n` +
+    `  hint: ${COMMANDS[command]?.usage || `loom ${command} <ID>`}\n` +
+    `        Accepts a video ID or full Loom URL.`
+  );
 }
 
+// --- Help ---
+
+function showHelp() {
+  console.log(`Loom CLI — query Loom videos from the command line
+
+USAGE
+  loom <command> [args] [--json]
+
+COMMANDS`);
+  for (const [cmd, { desc }] of Object.entries(COMMANDS)) {
+    console.log(`  ${cmd.padEnd(14)} ${desc}`);
+  }
+  console.log(`
+OPTIONS
+  --json         Output raw JSON (pipe to jq)
+  -n <COUNT>     Limit results (for list)
+  --all          Show all results (for list)
+  -h, --help     Show help
+  -V, --version  Show version
+
+EXAMPLES
+  loom list -n 5
+  loom video https://www.loom.com/share/abc123...
+  loom search "onboarding walkthrough"
+  loom transcript abc123 | pbcopy
+  loom list --json | jq '.[].name'
+  loom dump abc123 > meeting.json
+
+ENVIRONMENT
+  LOOM_COOKIE      connect.sid cookie value [from browser DevTools]
+  LOOM_AUTH_FILE   path to auth.json [default: ${AUTH_FILE}]
+
+LEARN MORE
+  loom <command> --help`);
+}
+
+function showCommandHelp(command) {
+  const cmd = COMMANDS[command];
+  if (!cmd) return false;
+  console.log(`${cmd.desc}
+
+USAGE
+  ${cmd.usage} [--json]`);
+  return true;
+}
+
+// --- Shell completions ---
+
+function generateCompletions(shell) {
+  const cmds = Object.keys(COMMANDS);
+  switch (shell) {
+    case "bash":
+      console.log(`# bash completion for loom
+# Add to ~/.bashrc: eval "$(loom completions bash)"
+_loom() {
+  local cur="\${COMP_WORDS[COMP_CWORD]}"
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    COMPREPLY=( $(compgen -W "${cmds.join(" ")} help" -- "$cur") )
+  fi
+}
+complete -F _loom loom`);
+      break;
+    case "zsh":
+      console.log(`# zsh completion for loom
+# Add to ~/.zshrc: eval "$(loom completions zsh)"
+_loom() {
+  local -a commands=(
+${cmds.map((c) => `    '${c}:${COMMANDS[c].desc}'`).join("\n")}
+    'help:Show help'
+  )
+  _describe 'command' commands
+}
+compdef _loom loom`);
+      break;
+    case "fish":
+      console.log(`# fish completion for loom
+# Save to ~/.config/fish/completions/loom.fish`);
+      for (const [cmd, { desc }] of Object.entries(COMMANDS)) {
+        console.log(`complete -c loom -n "__fish_use_subcommand" -a ${cmd} -d "${desc}"`);
+      }
+      console.log(`complete -c loom -n "__fish_use_subcommand" -a help -d "Show help"`);
+      break;
+    default:
+      usageError(
+        `error: unknown shell "${shell}"\n\n` +
+        `  hint: loom completions <bash|zsh|fish>`
+      );
+  }
+}
+
+// --- Main ---
+
 async function main() {
+  // Handle SIGPIPE silently
+  process.on("SIGPIPE", () => process.exit(0));
+
   const [command, ...args] = process.argv.slice(2);
 
+  // Global flags
   if (!command || command === "help" || command === "--help" || command === "-h") {
-    console.log("Usage: loom <command> [args]\n");
-    console.log("Commands:");
-    for (const [cmd, desc] of Object.entries(COMMANDS)) {
-      console.log(`  ${cmd.padEnd(14)} ${desc}`);
-    }
-    console.log(`\nOptions:`);
-    console.log(`  --json       Output raw JSON (pipe to jq)`);
-    console.log(`\nVideo IDs or Loom URLs accepted (e.g. https://www.loom.com/share/abc123)`);
-    console.log(`Auth: LOOM_COOKIE env, or ${AUTH_FILE}`);
+    showHelp();
     return;
+  }
+  if (command === "--version" || command === "-V") {
+    console.log(`loom ${VERSION}`);
+    return;
+  }
+  if (command === "completions") {
+    generateCompletions(args[0]);
+    return;
+  }
+
+  // Per-command --help
+  if (args.includes("--help") || args.includes("-h")) {
+    if (showCommandHelp(command)) return;
   }
 
   const jsonMode = args.includes("--json");
@@ -158,7 +288,7 @@ async function main() {
       }
       case "search": {
         const q = filteredArgs.join(" ");
-        if (!q) die("Usage: loom search <query>");
+        if (!q) usageError("error: missing search query\n\n  hint: loom search <query>");
         const results = await client.searchVideos(q);
         if (results.length === 0) return console.log("No results.");
         if (jsonMode) return console.log(JSON.stringify(results, null, 2));
@@ -354,6 +484,7 @@ async function main() {
         needsId(videoId, "user");
         const user = await client.getUserById(videoId);
         if (!user) return console.log("User not found.");
+        if (jsonMode) return console.log(JSON.stringify(user, null, 2));
         console.log(user.display_name);
         if (user.email) console.log(`  Email:    ${user.email}`);
         if (user.company_name) console.log(`  Company:  ${user.company_name}`);
@@ -391,15 +522,23 @@ async function main() {
         }, null, 2));
         break;
       }
-      default:
-        die(`Unknown command: ${command}\nRun "loom help" for usage.`);
+      default: {
+        const suggestion = suggest(command, Object.keys(COMMANDS));
+        let msg = `error: unknown command "${command}"`;
+        if (suggestion) msg += `\n\n  Did you mean "${suggestion}"?`;
+        msg += `\n\n  hint: Run "loom help" for a list of commands.`;
+        usageError(msg);
+      }
     }
   } catch (err) {
     const msg = err.message || String(err);
     if (msg.includes("403") || msg.includes("401") || msg.includes("Unauthorized")) {
-      die(`Auth error: session may have expired.\nRun "node refresh.js" or "node login.js".`);
+      die(
+        `error: authentication failed\n\n` +
+        `  hint: Session may have expired. Run "node refresh.js" or "node login.js".`
+      );
     }
-    die(msg);
+    die(`error: ${msg}`);
   }
 }
 
