@@ -70,6 +70,22 @@ function info(msg) {
   process.stderr.write(msg + "\n");
 }
 
+// Spinner for network operations (stderr only, TTY only)
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+function spinner(label = "Loading") {
+  if (!process.stderr.isTTY) return { stop() {} };
+  let i = 0, stopped = false;
+  const _write = process.stderr.write.bind(process.stderr);
+  const id = setInterval(() => {
+    _write(`\r${SPINNER_FRAMES[i++ % SPINNER_FRAMES.length]} ${label}`);
+  }, 80);
+  const stop = () => { if (stopped) return; stopped = true; clearInterval(id); _write("\r\x1b[K"); };
+  // Auto-clear spinner on first stdout data
+  const origWrite = process.stdout.write;
+  process.stdout.write = function (...a) { stop(); process.stdout.write = origWrite; return origWrite.apply(this, a); };
+  return { stop };
+}
+
 function suggest(input, candidates) {
   let best = null, bestDist = Infinity;
   for (const c of candidates) {
@@ -310,6 +326,7 @@ async function main() {
   const client = new LoomClient(cookies);
   const videoId = parseId(filteredArgs[0]);
 
+  const spin = spinner();
   try {
     switch (command) {
       case "whoami": {
@@ -573,6 +590,7 @@ async function main() {
       }
     }
   } catch (err) {
+    spin.stop();
     const msg = err.message || String(err);
     if (msg.includes("403") || msg.includes("401") || msg.includes("Unauthorized")) {
       die(
