@@ -3,6 +3,15 @@ import fs from "fs";
 import path from "path";
 import { LoomClient } from "./loom.js";
 
+// Load ../.env (no dependencies)
+const envPath = path.join(import.meta.dir, "..", ".env");
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
+    const m = line.match(/^\s*([^#=\s]+)\s*=\s*(.*)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+  }
+}
+
 const AUTH_FILE = process.env.LOOM_AUTH_FILE || path.join(import.meta.dir, "..", "auth.json");
 
 const COMMANDS = {
