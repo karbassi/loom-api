@@ -17,16 +17,23 @@ if (fs.existsSync(envPath)) {
 const AUTH_FILE = process.env.LOOM_AUTH_FILE || path.join(import.meta.dir, "..", "auth.json");
 
 const COMMANDS = {
-  list:        { desc: "List recent videos",          usage: "loom list [-n COUNT | --all]" },
-  search:      { desc: "Semantic search",             usage: "loom search <query>" },
-  video:       { desc: "Get video details",           usage: "loom video <ID>" },
-  transcript:  { desc: "Get transcript as text",      usage: "loom transcript <ID>" },
-  captions:    { desc: "Get VTT captions",            usage: "loom captions <ID>" },
-  download:    { desc: "Get download URL",            usage: "loom download <ID>" },
+  list:        { desc: "List recent videos",          usage: "loom list [-n COUNT | --all]",
+                 examples: ["loom list", "loom list -n 5", "loom list --all", "loom list --json | jq '.[].name'"] },
+  search:      { desc: "Semantic search",             usage: "loom search <QUERY>",
+                 examples: ["loom search onboarding", 'loom search "how to set up screening"'] },
+  video:       { desc: "Get video details",           usage: "loom video <ID>",
+                 examples: ["loom video abc123", "loom video https://www.loom.com/share/abc123", "loom video abc123 --json | jq '.views'"] },
+  transcript:  { desc: "Get transcript as text",      usage: "loom transcript <ID>",
+                 examples: ["loom transcript abc123", "loom transcript abc123 | pbcopy"] },
+  captions:    { desc: "Get VTT captions",            usage: "loom captions <ID>",
+                 examples: ["loom captions abc123", "loom captions abc123 > captions.vtt"] },
+  download:    { desc: "Get download URL",            usage: "loom download <ID>",
+                 examples: ["loom download abc123", "curl -o video.mp4 $(loom download abc123)"] },
   chapters:    { desc: "Get chapters",                usage: "loom chapters <ID>" },
   summary:     { desc: "Get AI summary",              usage: "loom summary <ID>" },
   description: { desc: "Get AI description",          usage: "loom description <ID>" },
-  comments:    { desc: "Get comments and replies",    usage: "loom comments <ID>" },
+  comments:    { desc: "Get comments and replies",    usage: "loom comments <ID>",
+                 examples: ["loom comments abc123", "loom comments abc123 --json"] },
   tasks:       { desc: "Get action items",            usage: "loom tasks <ID>" },
   reactions:   { desc: "Get emoji reactions",          usage: "loom reactions <ID>" },
   notes:       { desc: "Get meeting notes URL",       usage: "loom notes <ID>" },
@@ -34,12 +41,18 @@ const COMMANDS = {
   spaces:      { desc: "List your spaces",             usage: "loom spaces" },
   backlinks:   { desc: "Get backlinks",               usage: "loom backlinks <ID>" },
   tags:        { desc: "Get tags",                    usage: "loom tags <ID>" },
-  user:        { desc: "Get user profile",            usage: "loom user <userId>" },
-  open:        { desc: "Open video in browser",       usage: "loom open <ID>" },
+  user:        { desc: "Get user profile",            usage: "loom user <USER_ID>",
+                 examples: ["loom user 12345", "loom user 12345 --json"] },
+  open:        { desc: "Open video in browser",       usage: "loom open <ID>",
+                 examples: ["loom open abc123", "loom open https://www.loom.com/share/abc123"] },
   whoami:      { desc: "Check auth status",           usage: "loom whoami" },
-  dump:        { desc: "Dump all data as JSON",       usage: "loom dump <ID>" },
-  completions: { desc: "Generate shell completions",  usage: "loom completions <bash|zsh|fish>" },
+  dump:        { desc: "Dump all data as JSON",       usage: "loom dump <ID>",
+                 examples: ["loom dump abc123", "loom dump abc123 > meeting.json", "loom dump abc123 | jq '.transcript'"] },
+  completions: { desc: "Generate shell completions",  usage: "loom completions <bash|zsh|fish>",
+                 examples: ['eval "$(loom completions zsh)"', "loom completions fish > ~/.config/fish/completions/loom.fish"] },
 };
+
+const KNOWN_FLAGS = new Set(["--json", "--all", "--help", "--version", "-h", "-V", "-n"]);
 
 // --- Output helpers ---
 
@@ -50,6 +63,11 @@ function die(msg, code = 1) {
 
 function usageError(msg) {
   die(msg, 2);
+}
+
+// Write to stderr — for status messages, counts, hints (not data)
+function info(msg) {
+  process.stderr.write(msg + "\n");
 }
 
 function suggest(input, candidates) {
@@ -74,6 +92,19 @@ function levenshtein(a, b) {
     }
   }
   return dp[m];
+}
+
+function checkUnknownFlags(args) {
+  for (const a of args) {
+    if (a === "--") break;
+    if (a.startsWith("-") && !KNOWN_FLAGS.has(a) && !/^-\d+$/.test(a)) {
+      const suggestion = suggest(a, [...KNOWN_FLAGS]);
+      let msg = `error: unknown flag "${a}"`;
+      if (suggestion) msg += `\n\n  Did you mean "${suggestion}"?`;
+      msg += `\n\n  hint: Run "loom help" for available options.`;
+      usageError(msg);
+    }
+  }
 }
 
 function resolveAuth() {
@@ -160,7 +191,7 @@ COMMANDS`);
   console.log(`
 OPTIONS
   --json         Output raw JSON (pipe to jq)
-  -n <COUNT>     Limit results (for list)
+  -n <COUNT>     Limit results (for list) [default: 20]
   --all          Show all results (for list)
   -h, --help     Show help
   -V, --version  Show version
@@ -175,7 +206,7 @@ EXAMPLES
 
 ENVIRONMENT
   LOOM_COOKIE      connect.sid cookie value [from browser DevTools]
-  LOOM_AUTH_FILE   path to auth.json [default: ${AUTH_FILE}]
+  LOOM_AUTH_FILE   path to auth.json [default: ../auth.json]
 
 LEARN MORE
   loom <command> --help`);
@@ -188,6 +219,12 @@ function showCommandHelp(command) {
 
 USAGE
   ${cmd.usage} [--json]`);
+  if (cmd.examples?.length) {
+    console.log(`\nEXAMPLES`);
+    for (const ex of cmd.examples) {
+      console.log(`  ${ex}`);
+    }
+  }
   return true;
 }
 
@@ -238,8 +275,9 @@ compdef _loom loom`);
 // --- Main ---
 
 async function main() {
-  // Handle SIGPIPE silently
+  // Signal handling
   process.on("SIGPIPE", () => process.exit(0));
+  process.on("SIGINT", () => process.exit(130));
 
   const [command, ...args] = process.argv.slice(2);
 
@@ -262,8 +300,11 @@ async function main() {
     if (showCommandHelp(command)) return;
   }
 
+  // Check for unknown flags
+  checkUnknownFlags(args);
+
   const jsonMode = args.includes("--json");
-  const filteredArgs = args.filter((a) => a !== "--json");
+  const filteredArgs = args.filter((a) => a === "-n" || !a.startsWith("-"));
 
   const { cookies, sid } = resolveAuth();
   const client = new LoomClient(cookies);
@@ -288,12 +329,12 @@ async function main() {
       }
       case "search": {
         const q = filteredArgs.join(" ");
-        if (!q) usageError("error: missing search query\n\n  hint: loom search <query>");
+        if (!q) usageError("error: missing search query\n\n  hint: loom search <QUERY>");
         const results = await client.searchVideos(q);
-        if (results.length === 0) return console.log("No results.");
+        if (results.length === 0) { info("No results."); return; }
         if (jsonMode) return console.log(JSON.stringify(results, null, 2));
         for (const v of results) {
-          console.log(`  ${v.id}  ${v.name}`);
+          console.log(`${v.id}  ${v.name}`);
         }
         break;
       }
@@ -303,7 +344,7 @@ async function main() {
         if (nIdx !== -1 && filteredArgs[nIdx + 1]) {
           limit = parseInt(filteredArgs[nIdx + 1], 10) || 20;
         }
-        if (filteredArgs[0] === "all" || filteredArgs[0] === "--all") limit = Infinity;
+        if (args.includes("--all")) limit = Infinity;
 
         const videos = [];
         let cursor = null;
@@ -314,13 +355,12 @@ async function main() {
           if (!result.hasNextPage) break;
           cursor = result.endCursor;
         }
-        if (videos.length === 0) return console.log("No videos.");
+        if (videos.length === 0) { info("No videos."); return; }
         if (jsonMode) return console.log(JSON.stringify(videos, null, 2));
         for (const v of videos) {
-          console.log(`  ${v.id}  ${v.name}`);
+          console.log(`${v.id}  ${v.name}`);
         }
-        const suffix = limit !== Infinity ? '  (use "loom list --all" for everything)' : "";
-        console.log(`\n${videos.length} videos${suffix}`);
+        info(`\n${videos.length} videos` + (limit !== Infinity ? '  (use "loom list --all" for everything)' : ""));
         break;
       }
       case "video": {
@@ -344,48 +384,48 @@ async function main() {
         needsId(videoId, "transcript");
         const text = await client.getTranscriptText(videoId);
         if (text) console.log(text);
-        else console.log("No transcript available.");
+        else info("No transcript available.");
         break;
       }
       case "captions": {
         needsId(videoId, "captions");
         const vtt = await client.getCaptions(videoId);
         if (vtt) console.log(vtt);
-        else console.log("No captions available.");
+        else info("No captions available.");
         break;
       }
       case "download": {
         needsId(videoId, "download");
         const url = await client.getDownloadUrl(videoId);
         if (url) console.log(url);
-        else console.log("No download URL available.");
+        else info("No download URL available.");
         break;
       }
       case "chapters": {
         needsId(videoId, "chapters");
         const chapters = await client.getChapters(videoId);
         if (chapters?.content) console.log(chapters.content);
-        else console.log("No chapters available.");
+        else info("No chapters available.");
         break;
       }
       case "summary": {
         needsId(videoId, "summary");
         const summary = await client.getSummary(videoId);
         if (summary?.autoDescription) console.log(summary.autoDescription);
-        else console.log("No summary available.");
+        else info("No summary available.");
         break;
       }
       case "description": case "desc": {
         needsId(videoId, "description");
         const desc = await client.getDescription(videoId);
         if (desc) console.log(desc);
-        else console.log("No description available.");
+        else info("No description available.");
         break;
       }
       case "comments": {
         needsId(videoId, "comments");
         const comments = await client.getComments(videoId);
-        if (comments.length === 0) return console.log("No comments.");
+        if (comments.length === 0) { info("No comments."); return; }
         if (jsonMode) return console.log(JSON.stringify(comments, null, 2));
         for (const c of comments) {
           const ts = c.time_stamp != null ? ` @${fmtDuration(c.time_stamp)}` : "";
@@ -399,7 +439,7 @@ async function main() {
       case "tasks": {
         needsId(videoId, "tasks");
         const tasks = await client.getTasks(videoId);
-        if (tasks.length === 0) return console.log("No action items.");
+        if (tasks.length === 0) { info("No action items."); return; }
         if (jsonMode) return console.log(JSON.stringify(tasks, null, 2));
         for (const t of tasks) {
           const owner = t.owner?.display_name || "Unassigned";
@@ -412,7 +452,7 @@ async function main() {
       case "reactions": {
         needsId(videoId, "reactions");
         const reactions = await client.getReactions(videoId);
-        if (reactions.length === 0) return console.log("No reactions.");
+        if (reactions.length === 0) { info("No reactions."); return; }
         if (jsonMode) return console.log(JSON.stringify(reactions, null, 2));
         for (const r of reactions) {
           const user = r.user?.display_name || r.anon_user_name || "Anonymous";
@@ -426,7 +466,7 @@ async function main() {
         needsId(videoId, "notes");
         const notesUrl = await client.getMeetingNotesUrl(videoId);
         if (notesUrl) console.log(notesUrl);
-        else console.log("No meeting notes linked.");
+        else info("No meeting notes linked.");
         break;
       }
       case "folders": {
@@ -438,12 +478,12 @@ async function main() {
           if (!r.hasNextPage) break;
           folderCursor = r.endCursor;
         }
-        if (allFolders.length === 0) return console.log("No folders.");
+        if (allFolders.length === 0) { info("No folders."); return; }
         if (jsonMode) return console.log(JSON.stringify(allFolders, null, 2));
         for (const f of allFolders) {
-          console.log(`  ${f.id}  ${f.name}  (${f.visibility || "unknown"})`);
+          console.log(`${f.id}  ${f.name}  (${f.visibility || "unknown"})`);
         }
-        console.log(`\n${allFolders.length} folders`);
+        info(`\n${allFolders.length} folders`);
         break;
       }
       case "spaces": {
@@ -455,19 +495,20 @@ async function main() {
           if (!r.hasNextPage) break;
           spaceCursor = r.endCursor;
         }
-        if (allSpaces.length === 0) return console.log("No spaces.");
+        if (allSpaces.length === 0) { info("No spaces."); return; }
         if (jsonMode) return console.log(JSON.stringify(allSpaces, null, 2));
         for (const s of allSpaces) {
           const primary = s.is_primary ? " (primary)" : "";
-          console.log(`  ${s.id}  ${s.name}  [${s.privacy || "unknown"}]${primary}`);
+          console.log(`${s.id}  ${s.name}  [${s.privacy || "unknown"}]${primary}`);
         }
-        console.log(`\n${allSpaces.length} spaces`);
+        info(`\n${allSpaces.length} spaces`);
         break;
       }
       case "backlinks": {
         needsId(videoId, "backlinks");
         const backlinks = await client.getBacklinks(videoId);
-        if (backlinks.length === 0) return console.log("No backlinks.");
+        if (backlinks.length === 0) { info("No backlinks."); return; }
+        if (jsonMode) return console.log(JSON.stringify(backlinks, null, 2));
         for (const b of backlinks) {
           console.log(`[${b.source}] ${b.title || "Untitled"} — ${b.sourceLink || ""}`);
         }
@@ -476,14 +517,15 @@ async function main() {
       case "tags": {
         needsId(videoId, "tags");
         const tags = await client.getTags(videoId);
-        if (!tags.length) return console.log("No tags.");
+        if (!tags.length) { info("No tags."); return; }
+        if (jsonMode) return console.log(JSON.stringify(tags, null, 2));
         console.log(tags.join(", "));
         break;
       }
       case "user": {
         needsId(videoId, "user");
         const user = await client.getUserById(videoId);
-        if (!user) return console.log("User not found.");
+        if (!user) { info("User not found."); return; }
         if (jsonMode) return console.log(JSON.stringify(user, null, 2));
         console.log(user.display_name);
         if (user.email) console.log(`  Email:    ${user.email}`);
