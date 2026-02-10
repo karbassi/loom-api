@@ -2,6 +2,13 @@
 
 Command-line interface for Loom's internal GraphQL API. Zero dependencies — runs on Bun.
 
+## Install
+
+```sh
+git clone git@github.com:karbassi/loom-api.git
+cd loom-api
+```
+
 ## Setup
 
 ### Option A: Cookie from browser (quickest)

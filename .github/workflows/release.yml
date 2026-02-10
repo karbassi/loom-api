@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: bun-darwin-arm64
+            artifact: loom-macos-arm64
+          - os: macos-13
+            target: bun-darwin-x64
+            artifact: loom-macos-x86_64
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            artifact: loom-linux-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.9"
+
+      - name: Build binary
+        run: |
+          cd cli
+          bun build --compile --target=${{ matrix.target }} ./cli.js --outfile loom
+
+      - name: Package
+        run: |
+          cd cli
+          tar czf ${{ matrix.artifact }}.tar.gz loom
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: cli/${{ matrix.artifact }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.tar.gz"
+          generate_release_notes: true
+
+      - name: Dispatch to homebrew-tap
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: karbassi/homebrew-tap
+          event-type: release
+          client-payload: '{"formula": "loom"}'
