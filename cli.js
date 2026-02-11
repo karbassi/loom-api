@@ -51,6 +51,18 @@ const COMMANDS = {
                  examples: ["loom dump abc123", "loom dump abc123 > meeting.json", "loom dump abc123 | jq '.transcript'"] },
   completions: { desc: "Generate shell completions",  usage: "loom completions <bash|zsh|fish>",
                  examples: ['eval "$(loom completions zsh)"', "loom completions fish > ~/.config/fish/completions/loom.fish"] },
+  takeaways:   { desc: "Get AI key takeaways",        usage: "loom takeaways <ID>" },
+  confluence:  { desc: "Get linked Confluence pages",  usage: "loom confluence <ID>" },
+  "search-folders": { desc: "Search folders by name",  usage: "loom search-folders <QUERY>",
+                 examples: ['loom search-folders "Project"'] },
+  "watch-time":     { desc: "Get last watch position", usage: "loom watch-time <ID>" },
+  "watch-later-count": { desc: "Get Watch Later count", usage: "loom watch-later-count" },
+  "video-count":    { desc: "Get total videos for a user", usage: "loom video-count <USER_ID>" },
+  "frequent-reactions": { desc: "Get your frequent reactions", usage: "loom frequent-reactions" },
+  "comment-reactions":  { desc: "Get reactions on a comment", usage: "loom comment-reactions <COMMENT_ID> [--type COMMENT|REPLY]" },
+  "search-tags":   { desc: "Search workspace tags",    usage: "loom search-tags <QUERY>" },
+  space:           { desc: "Get space details",         usage: "loom space <SPACE_ID>" },
+  folder:          { desc: "Get folder details",        usage: "loom folder <FOLDER_ID>" },
 
   // --- Write commands ---
   rename:          { desc: "Rename a video",              usage: "loom rename <ID> <NAME>",
@@ -87,7 +99,7 @@ const COMMANDS = {
 
 const WRITE_ONLY_FLAGS = new Set(["--dry-run", "--yes", "-y", "--force", "-f", "--at", "--to"]);
 const KNOWN_FLAGS = new Set([
-  "--json", "--all", "--help", "--version", "--no-color", "--color", "-h", "-V", "-n",
+  "--json", "--all", "--help", "--version", "--no-color", "--color", "-h", "-V", "-n", "--type",
   ...WRITE_ONLY_FLAGS,
 ]);
 
@@ -314,6 +326,8 @@ const READ_COMMANDS = new Set([
   "list", "search", "video", "transcript", "captions", "download", "chapters",
   "summary", "description", "comments", "tasks", "reactions", "notes", "folders",
   "spaces", "backlinks", "tags", "user", "open", "whoami", "dump", "completions",
+  "takeaways", "confluence", "search-folders", "watch-time", "watch-later-count",
+  "video-count", "frequent-reactions", "comment-reactions", "search-tags", "space", "folder",
 ]);
 
 function showHelp() {
@@ -735,6 +749,102 @@ async function main() {
           tasks,
           comments,
         }, null, 2) + "\n");
+        break;
+      }
+      case "takeaways": {
+        needsId(videoId, "takeaways");
+        const takeaways = await client.getKeyTakeaways(videoId);
+        if (!takeaways.length) { info("No key takeaways available."); return; }
+        if (jsonMode) return console.log(JSON.stringify(takeaways, null, 2));
+        for (const t of takeaways) console.log(`- ${t}`);
+        break;
+      }
+      case "confluence": {
+        needsId(videoId, "confluence");
+        const pages = await client.getConfluencePages(videoId);
+        if (!pages.length) { info("No Confluence pages linked."); return; }
+        if (jsonMode) return console.log(JSON.stringify(pages, null, 2));
+        for (const p of pages) console.log(`${p.title || "Untitled"}  ${c.cyan(p.url || "")}`);
+        break;
+      }
+      case "search-folders": {
+        const q = filteredArgs.join(" ");
+        if (!q) usageError("error: missing search query\n\n  hint: loom search-folders <QUERY>");
+        const matchedFolders = await client.searchFolders(q);
+        if (!matchedFolders.length) { info("No matching folders."); return; }
+        if (jsonMode) return console.log(JSON.stringify(matchedFolders, null, 2));
+        for (const f of matchedFolders) console.log(`${c.dim(f.id)}  ${f.name}`);
+        break;
+      }
+      case "watch-time": {
+        needsId(videoId, "watch-time");
+        const time = await client.getLastWatchTime(videoId);
+        if (time == null) { info("No watch history for this video."); return; }
+        if (jsonMode) return console.log(JSON.stringify({ video_id: videoId, last_watch_time: time }, null, 2));
+        console.log(`Last watched at ${fmtDuration(time)}`);
+        break;
+      }
+      case "watch-later-count": {
+        const count = await client.getWatchLaterCount();
+        if (jsonMode) return console.log(JSON.stringify({ count }, null, 2));
+        console.log(`Watch Later: ${count} video(s)`);
+        break;
+      }
+      case "video-count": {
+        needsId(videoId, "video-count");
+        const count = await client.getTotalVideosCount(videoId);
+        if (jsonMode) return console.log(JSON.stringify({ user_id: videoId, count }, null, 2));
+        console.log(`${count} videos`);
+        break;
+      }
+      case "frequent-reactions": {
+        const freqReactions = await client.getFrequentReactions();
+        if (!freqReactions.length) { info("No recent reactions."); return; }
+        if (jsonMode) return console.log(JSON.stringify(freqReactions, null, 2));
+        console.log(freqReactions.join(", "));
+        break;
+      }
+      case "comment-reactions": {
+        const commentId = filteredArgs[0];
+        if (!commentId) usageError("error: missing required argument\n\n  hint: loom comment-reactions <COMMENT_ID> [--type COMMENT|REPLY]");
+        const typeIdx = args.indexOf("--type");
+        const commentType = typeIdx !== -1 && args[typeIdx + 1] ? args[typeIdx + 1] : "COMMENT";
+        const cReactions = await client.getCommentReactions(commentId, commentType);
+        if (!cReactions.length) { info("No reactions on this comment."); return; }
+        if (jsonMode) return console.log(JSON.stringify(cReactions, null, 2));
+        for (const r of cReactions) console.log(`[${c.bold(r.userName || "Unknown")}] ${r.extendedReaction || ""}`);
+        break;
+      }
+      case "search-tags": {
+        const q = filteredArgs.join(" ");
+        if (!q) usageError("error: missing search query\n\n  hint: loom search-tags <QUERY>");
+        const matchedTags = await client.searchWorkspaceTags(q);
+        if (!matchedTags.length) { info("No matching tags."); return; }
+        console.log(JSON.stringify(matchedTags, null, 2));
+        break;
+      }
+      case "space": {
+        needsId(videoId, "space");
+        const spaceInfo = await client.getSpace(videoId);
+        if (!spaceInfo) { info("Space not found."); return; }
+        if (jsonMode) return console.log(JSON.stringify(spaceInfo, null, 2));
+        console.log(c.bold(spaceInfo.name));
+        console.log(`  ${c.dim("Privacy:")}   ${spaceInfo.privacy || "unknown"}`);
+        if (spaceInfo.is_primary) console.log(`  ${c.dim("Primary:")}   yes`);
+        console.log(`  ${c.dim("ID:")}        ${c.dim(spaceInfo.id)}`);
+        break;
+      }
+      case "folder": {
+        const folderId = filteredArgs[0];
+        if (!folderId) usageError("error: missing required argument\n\n  hint: loom folder <FOLDER_ID>");
+        const folderInfo = await client.getFolder(folderId);
+        if (!folderInfo) { info("Folder not found."); return; }
+        if (jsonMode) return console.log(JSON.stringify(folderInfo, null, 2));
+        console.log(c.bold(folderInfo.name));
+        console.log(`  ${c.dim("Visibility:")} ${folderInfo.visibility || "unknown"}`);
+        if (folderInfo.created_by) console.log(`  ${c.dim("Created by:")} ${folderInfo.created_by.display_name}`);
+        if (folderInfo.createdAt) console.log(`  ${c.dim("Created:")}    ${fmtDate(folderInfo.createdAt)}`);
+        console.log(`  ${c.dim("ID:")}         ${c.dim(folderInfo.id)}`);
         break;
       }
       // --- Write commands ---
