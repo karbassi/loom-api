@@ -102,6 +102,11 @@ const COMMANDS = {
   "edit-task":     { desc: "Edit a task",                 usage: "loom edit-task <TASK_ID> <TEXT>",
                      examples: ['loom edit-task task123 "Updated task"'] },
   "respond-task":  { desc: "Mark a task as responded",    usage: "loom respond-task <TASK_ID>" },
+  "add-reaction":  { desc: "Add a reaction to a video",   usage: "loom add-reaction <ID> <TYPE> --at <SEC>",
+                     examples: ['loom add-reaction abc123 heart --at 30', "loom frequent-reactions  # to see valid types"] },
+  "delete-reaction": { desc: "Delete a reaction",         usage: "loom delete-reaction <REACTION_ID> --force" },
+  "react-comment": { desc: "React to a comment",          usage: "loom react-comment <COMMENT_ID> <REACTION>",
+                     examples: ['loom react-comment cmt123 heart'] },
 };
 
 const WRITE_ONLY_FLAGS = new Set(["--dry-run", "--yes", "-y", "--force", "-f", "--at", "--to"]);
@@ -1167,6 +1172,49 @@ async function main() {
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
         info(`Responded to task ${c.dim(taskId)}`);
+        break;
+      }
+
+      case "add-reaction": {
+        const { flags, positional } = parseWriteArgs(args, ["--at"]);
+        const id = parseId(positional[0]);
+        const type = positional[1];
+        needsId(id, "add-reaction");
+        if (!type) usageError(`error: missing reaction type\n  command: loom add-reaction\n\n  hint: loom add-reaction <ID> <TYPE> --at <SEC>\n        Use ${c.cyan('"loom frequent-reactions"')} to see valid types.`);
+        const timestamp = flags.at != null ? parseInt(flags.at, 10) : 0;
+        if (flags.at != null && isNaN(timestamp)) usageError(`error: --at must be a number (seconds)\n\n  hint: loom add-reaction <ID> <TYPE> --at 30`);
+        if (flags.dryRun) { dryRun(spin, flags, `Would add ${type} reaction to ${c.dim(id)} @${fmtDuration(timestamp)}`, { action: "add-reaction", id, type, timestamp }); break; }
+        const result = await client.addReaction(id, timestamp, type);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Added ${type} reaction to ${c.dim(id)} @${fmtDuration(timestamp)}`);
+        break;
+      }
+
+      case "delete-reaction": {
+        const { flags, positional } = parseWriteArgs(args);
+        const reactionId = positional[0];
+        if (!reactionId) usageError(`error: missing required argument\n  command: loom delete-reaction\n\n  hint: loom delete-reaction <REACTION_ID> --force`);
+        if (!flags.force) usageError(`error: --force required for delete-reaction\n\n  hint: loom delete-reaction <REACTION_ID> --force`);
+        if (flags.dryRun) { dryRun(spin, flags, `Would delete reaction ${c.dim(reactionId)}`, { action: "delete-reaction", reaction_id: reactionId }); break; }
+        const result = await client.deleteReaction(reactionId);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Deleted reaction ${c.dim(reactionId)}`);
+        break;
+      }
+
+      case "react-comment": {
+        const { flags, positional } = parseWriteArgs(args);
+        const commentId = positional[0];
+        const reaction = positional[1];
+        if (!commentId) usageError(`error: missing required argument\n  command: loom react-comment\n\n  hint: loom react-comment <COMMENT_ID> <REACTION>`);
+        if (!reaction) usageError(`error: missing reaction\n  command: loom react-comment\n\n  hint: loom react-comment <COMMENT_ID> <REACTION>`);
+        if (flags.dryRun) { dryRun(spin, flags, `Would react to comment ${c.dim(commentId)} with ${reaction}`, { action: "react-comment", comment_id: commentId, reaction }); break; }
+        const result = await client.addCommentReaction(commentId, reaction);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Reacted to comment ${c.dim(commentId)} with ${reaction}`);
         break;
       }
 
