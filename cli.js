@@ -95,6 +95,13 @@ const COMMANDS = {
                      examples: ["loom move abc123 --to folder456", "loom move abc123 def456 --to folder456 --yes"] },
   follow:          { desc: "Follow a video",              usage: "loom follow <ID>" },
   unfollow:        { desc: "Unfollow a video",            usage: "loom unfollow <ID>" },
+  "edit-settings": { desc: "Update video settings",       usage: "loom edit-settings <ID> <KEY=VALUE> [KEY=VALUE...]",
+                     examples: ['loom edit-settings abc123 download_enabled=true', 'loom edit-settings abc123 comments_enabled=false'] },
+  "edit-comment":  { desc: "Edit a comment",              usage: "loom edit-comment <COMMENT_ID> <VIDEO_ID> <TEXT>",
+                     examples: ['loom edit-comment cmt123 abc123 "Updated text"'] },
+  "edit-task":     { desc: "Edit a task",                 usage: "loom edit-task <TASK_ID> <TEXT>",
+                     examples: ['loom edit-task task123 "Updated task"'] },
+  "respond-task":  { desc: "Mark a task as responded",    usage: "loom respond-task <TASK_ID>" },
 };
 
 const WRITE_ONLY_FLAGS = new Set(["--dry-run", "--yes", "-y", "--force", "-f", "--at", "--to"]);
@@ -1097,6 +1104,69 @@ async function main() {
         spin.stop();
         if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
         info(`${isFollow ? "Following" : "Unfollowed"} ${c.dim(id)}`);
+        break;
+      }
+
+      case "edit-settings": {
+        const { flags, positional } = parseWriteArgs(args);
+        const id = parseId(positional[0]);
+        needsId(id, "edit-settings");
+        const pairs = positional.slice(1);
+        if (!pairs.length) usageError(`error: missing settings\n\n  hint: loom edit-settings <ID> <KEY=VALUE> [KEY=VALUE...]\n        Example: loom edit-settings abc123 download_enabled=true`);
+        const settings = {};
+        for (const p of pairs) {
+          const [k, ...rest] = p.split("=");
+          const v = rest.join("=");
+          if (!k || v === "") usageError(`error: invalid setting "${p}"\n\n  hint: Use KEY=VALUE format, e.g. download_enabled=true`);
+          settings[k] = v === "true" ? true : v === "false" ? false : isNaN(Number(v)) ? v : Number(v);
+        }
+        if (flags.dryRun) { dryRun(spin, flags, `Would update settings on ${c.dim(id)}: ${JSON.stringify(settings)}`, { action: "edit-settings", id, settings }); break; }
+        const result = await client.updateVideoSettings(id, settings);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Updated settings on ${c.dim(id)}`);
+        break;
+      }
+
+      case "edit-comment": {
+        const { flags, positional } = parseWriteArgs(args);
+        const commentId = positional[0];
+        const vid = parseId(positional[1]);
+        const text = positional.slice(2).join(" ");
+        if (!commentId) usageError(`error: missing required argument\n  command: loom edit-comment\n\n  hint: loom edit-comment <COMMENT_ID> <VIDEO_ID> <TEXT>`);
+        if (!vid) usageError(`error: missing video ID\n  command: loom edit-comment\n\n  hint: loom edit-comment <COMMENT_ID> <VIDEO_ID> <TEXT>`);
+        if (!text) usageError(`error: missing comment text\n  command: loom edit-comment\n\n  hint: loom edit-comment <COMMENT_ID> <VIDEO_ID> <TEXT>`);
+        if (flags.dryRun) { dryRun(spin, flags, `Would edit comment ${c.dim(commentId)}: "${text}"`, { action: "edit-comment", comment_id: commentId, video_id: vid, content: text }); break; }
+        const result = await client.editComment(commentId, vid, text);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Edited comment ${c.dim(commentId)}`);
+        break;
+      }
+
+      case "edit-task": {
+        const { flags, positional } = parseWriteArgs(args);
+        const taskId = positional[0];
+        const text = positional.slice(1).join(" ");
+        if (!taskId) usageError(`error: missing required argument\n  command: loom edit-task\n\n  hint: loom edit-task <TASK_ID> <TEXT>`);
+        if (!text) usageError(`error: missing task text\n  command: loom edit-task\n\n  hint: loom edit-task <TASK_ID> <TEXT>`);
+        if (flags.dryRun) { dryRun(spin, flags, `Would edit task ${c.dim(taskId)}: "${text}"`, { action: "edit-task", task_id: taskId, content: text }); break; }
+        const result = await client.updateVideoTask(taskId, text);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Edited task ${c.dim(taskId)}`);
+        break;
+      }
+
+      case "respond-task": {
+        const { flags, positional } = parseWriteArgs(args);
+        const taskId = positional[0];
+        if (!taskId) usageError(`error: missing required argument\n  command: loom respond-task\n\n  hint: loom respond-task <TASK_ID>`);
+        if (flags.dryRun) { dryRun(spin, flags, `Would mark task ${c.dim(taskId)} as responded`, { action: "respond-task", task_id: taskId }); break; }
+        const result = await client.respondToTask(taskId, true);
+        spin.stop();
+        if (flags.json) { console.log(JSON.stringify(result, null, 2)); break; }
+        info(`Responded to task ${c.dim(taskId)}`);
         break;
       }
 
