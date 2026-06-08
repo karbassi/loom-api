@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 import fs from "fs";
 import path from "path";
-import { spawnSync } from "child_process";
-import { LoomClient } from "./loom.js";
+import { LoomClient } from "./client.ts";
+import { COMMANDS, KNOWN_FLAGS, READ_COMMANDS, WRITE_ONLY_FLAGS, generateCompletions, showCommandHelp, showHelp } from "./commands.ts";
+import { c, confirm, die, info, page, spinner, usageError } from "./ui.ts";
+import { checkUnknownFlags, dryRun, fmtDate, fmtDuration, needsId, parseId, parseWriteArgs, resolveAuth, suggest } from "./utils.ts";
 
 const VERSION = "1.0.0";
 
@@ -17,454 +19,12 @@ if (fs.existsSync(envPath)) {
 
 const AUTH_FILE = process.env.LOOM_AUTH_FILE || path.join(import.meta.dir, "..", "auth.json");
 
-const COMMANDS = {
-  list:        { desc: "List recent videos",          usage: "loom list [-n COUNT | --all]",
-                 examples: ["loom list", "loom list -n 5", "loom list --all", "loom list --json | jq '.[].name'"] },
-  search:      { desc: "Semantic search",             usage: "loom search <QUERY>",
-                 examples: ["loom search onboarding", 'loom search "how to set up screening"'] },
-  video:       { desc: "Get video details",           usage: "loom video <ID>",
-                 examples: ["loom video abc123", "loom video https://www.loom.com/share/abc123", "loom video abc123 --json | jq '.views'"] },
-  transcript:  { desc: "Get transcript as text",      usage: "loom transcript <ID>",
-                 examples: ["loom transcript abc123", "loom transcript abc123 | pbcopy"] },
-  captions:    { desc: "Get VTT captions",            usage: "loom captions <ID>",
-                 examples: ["loom captions abc123", "loom captions abc123 > captions.vtt"] },
-  download:    { desc: "Get download URL",            usage: "loom download <ID>",
-                 examples: ["loom download abc123", "curl -o video.mp4 $(loom download abc123)"] },
-  chapters:    { desc: "Get chapters",                usage: "loom chapters <ID>" },
-  summary:     { desc: "Get AI summary",              usage: "loom summary <ID>" },
-  description: { desc: "Get AI description",          usage: "loom description <ID>" },
-  comments:    { desc: "Get comments and replies",    usage: "loom comments <ID>",
-                 examples: ["loom comments abc123", "loom comments abc123 --json"] },
-  tasks:       { desc: "Get action items",            usage: "loom tasks <ID>" },
-  reactions:   { desc: "Get emoji reactions",          usage: "loom reactions <ID>" },
-  notes:       { desc: "Get meeting notes URL",       usage: "loom notes <ID>" },
-  folders:     { desc: "List your folders",            usage: "loom folders" },
-  spaces:      { desc: "List your spaces",             usage: "loom spaces" },
-  backlinks:   { desc: "Get backlinks",               usage: "loom backlinks <ID>" },
-  tags:        { desc: "Get tags",                    usage: "loom tags <ID>" },
-  user:        { desc: "Get user profile",            usage: "loom user <USER_ID>",
-                 examples: ["loom user 12345", "loom user 12345 --json"] },
-  open:        { desc: "Open video in browser",       usage: "loom open <ID>",
-                 examples: ["loom open abc123", "loom open https://www.loom.com/share/abc123"] },
-  whoami:      { desc: "Check auth status",           usage: "loom whoami" },
-  dump:        { desc: "Dump all data as JSON",       usage: "loom dump <ID>",
-                 examples: ["loom dump abc123", "loom dump abc123 > meeting.json", "loom dump abc123 | jq '.transcript'"] },
-  completions: { desc: "Generate shell completions",  usage: "loom completions <bash|zsh|fish>",
-                 examples: ['eval "$(loom completions zsh)"', "loom completions fish > ~/.config/fish/completions/loom.fish"] },
-  takeaways:   { desc: "Get AI key takeaways",        usage: "loom takeaways <ID>" },
-  confluence:  { desc: "Get linked Confluence pages",  usage: "loom confluence <ID>" },
-  "search-folders": { desc: "Search folders by name",  usage: "loom search-folders <QUERY>",
-                 examples: ['loom search-folders "Project"'] },
-  "watch-time":     { desc: "Get last watch position", usage: "loom watch-time <ID>" },
-  "watch-later-count": { desc: "Get Watch Later count", usage: "loom watch-later-count" },
-  "video-count":    { desc: "Get total videos for a user", usage: "loom video-count <USER_ID>" },
-  "frequent-reactions": { desc: "Get your frequent reactions", usage: "loom frequent-reactions" },
-  "comment-reactions":  { desc: "Get reactions on a comment", usage: "loom comment-reactions <COMMENT_ID> [--type COMMENT|REPLY]" },
-  "search-tags":   { desc: "Search workspace tags",    usage: "loom search-tags <QUERY>" },
-  space:           { desc: "Get space details",         usage: "loom space <SPACE_ID>" },
-  folder:          { desc: "Get folder details",        usage: "loom folder <FOLDER_ID>" },
-
-  // --- Write commands ---
-  rename:          { desc: "Rename a video",              usage: "loom rename <ID> <NAME>",
-                     examples: ['loom rename abc123 "New Title"', 'loom rename abc123 "New Title" --dry-run'] },
-  "edit-description": { desc: "Edit video description",  usage: "loom edit-description <ID> <TEXT>",
-                     examples: ['loom edit-description abc123 "Updated description"'] },
-  archive:         { desc: "Archive video(s)",            usage: "loom archive <ID> [ID...]",
-                     examples: ["loom archive abc123", "loom archive abc123 def456 --yes"] },
-  unarchive:       { desc: "Unarchive video(s)",          usage: "loom unarchive <ID> [ID...]" },
-  delete:          { desc: "Delete a video",              usage: "loom delete <ID> --force",
-                     examples: ["loom delete abc123 --force", "loom delete abc123 --force --dry-run"] },
-  recover:         { desc: "Recover a deleted video",     usage: "loom recover <ID>" },
-  duplicate:       { desc: "Duplicate a video",           usage: "loom duplicate <ID>" },
-  pin:             { desc: "Pin a video",                 usage: "loom pin <ID>" },
-  unpin:           { desc: "Unpin a video",               usage: "loom unpin <ID>" },
-  comment:         { desc: "Add a comment",               usage: "loom comment <ID> <TEXT> [--at SEC]",
-                     examples: ['loom comment abc123 "Great video!"', 'loom comment abc123 "See this part" --at 30'] },
-  "delete-comment": { desc: "Delete a comment",           usage: "loom delete-comment <COMMENT_ID> --force" },
-  "add-task":      { desc: "Add an action item",          usage: "loom add-task <ID> <TEXT> [--at SEC]",
-                     examples: ['loom add-task abc123 "Follow up on this"', 'loom add-task abc123 "Review" --at 45'] },
-  done:            { desc: "Mark a task as done",          usage: "loom done <TASK_ID>" },
-  "delete-task":   { desc: "Delete a task",               usage: "loom delete-task <TASK_ID> --force" },
-  "create-folder": { desc: "Create a folder",             usage: "loom create-folder <NAME>",
-                     examples: ['loom create-folder "Project X"'] },
-  "rename-folder": { desc: "Rename a folder",             usage: "loom rename-folder <FOLDER_ID> <NAME>",
-                     examples: ['loom rename-folder abc123 "New Folder Name"'] },
-  "delete-folder": { desc: "Delete folder(s)",            usage: "loom delete-folder <ID> [ID...] --force",
-                     examples: ["loom delete-folder abc123 --force"] },
-  move:            { desc: "Move video(s) to a folder",   usage: "loom move <ID> [ID...] --to <FOLDER_ID>",
-                     examples: ["loom move abc123 --to folder456", "loom move abc123 def456 --to folder456 --yes"] },
-  follow:          { desc: "Follow a video",              usage: "loom follow <ID>" },
-  unfollow:        { desc: "Unfollow a video",            usage: "loom unfollow <ID>" },
-  "edit-settings": { desc: "Update video settings",       usage: "loom edit-settings <ID> <KEY=VALUE> [KEY=VALUE...]",
-                     examples: ['loom edit-settings abc123 download_enabled=true', 'loom edit-settings abc123 comments_enabled=false'] },
-  "edit-comment":  { desc: "Edit a comment",              usage: "loom edit-comment <COMMENT_ID> <VIDEO_ID> <TEXT>",
-                     examples: ['loom edit-comment cmt123 abc123 "Updated text"'] },
-  "edit-task":     { desc: "Edit a task",                 usage: "loom edit-task <TASK_ID> <TEXT>",
-                     examples: ['loom edit-task task123 "Updated task"'] },
-  "respond-task":  { desc: "Mark a task as responded",    usage: "loom respond-task <TASK_ID>" },
-  "add-reaction":  { desc: "Add a reaction to a video",   usage: "loom add-reaction <ID> <TYPE> --at <SEC>",
-                     examples: ['loom add-reaction abc123 heart --at 30', "loom frequent-reactions  # to see valid types"] },
-  "delete-reaction": { desc: "Delete a reaction",         usage: "loom delete-reaction <REACTION_ID> --force" },
-  "react-comment": { desc: "React to a comment",          usage: "loom react-comment <COMMENT_ID> <REACTION>",
-                     examples: ['loom react-comment cmt123 heart'] },
-};
-
-const WRITE_ONLY_FLAGS = new Set(["--dry-run", "--yes", "-y", "--force", "-f", "--at", "--to"]);
-const KNOWN_FLAGS = new Set([
-  "--json", "--all", "--help", "--version", "--no-color", "--color", "-h", "-V", "-n", "--type",
-  ...WRITE_ONLY_FLAGS,
-]);
-
-// --- Color ---
-
-const useColor = (() => {
-  const argv = process.argv;
-  const colorFlag = argv.find(a => a.startsWith("--color="));
-  if (colorFlag) {
-    const val = colorFlag.split("=")[1];
-    if (val === "never") return false;
-    if (val === "always") return true;
-    // "auto" falls through to detection
-  }
-  if (argv.includes("--no-color")) return false;
-  if (process.env.NO_COLOR !== undefined) return false;
-  if (process.env.FORCE_COLOR !== undefined) return true;
-  if (process.env.TERM === "dumb") return false;
-  return process.stdout.isTTY === true;
-})();
-
-const c = useColor
-  ? { red: s => `\x1b[31m${s}\x1b[0m`, green: s => `\x1b[32m${s}\x1b[0m`,
-      yellow: s => `\x1b[33m${s}\x1b[0m`, cyan: s => `\x1b[36m${s}\x1b[0m`,
-      bold: s => `\x1b[1m${s}\x1b[0m`, dim: s => `\x1b[2m${s}\x1b[0m` }
-  : { red: s => s, green: s => s, yellow: s => s, cyan: s => s, bold: s => s, dim: s => s };
-
-// --- Output helpers ---
-
-function die(msg, code = 1) {
-  // Colorize structured error messages: red "error:", dim "hint:"
-  const colored = msg
-    .replace(/^(error:)/m, c.red("$1"))
-    .replace(/^(  hint:)/m, c.dim("  hint:"));
-  console.error(colored);
-  process.exit(code);
-}
-
-function usageError(msg) {
-  die(msg, 2);
-}
-
-// Write to stderr — for status messages, counts, hints (not data)
-function info(msg) {
-  process.stderr.write(msg + "\n");
-}
-
-// Page long output through $PAGER when TTY (default: less -RFX)
-function page(text) {
-  if (!text) return;
-  if (!process.stdout.isTTY) { process.stdout.write(text); return; }
-  const rows = process.stdout.rows || 24;
-  if (text.split("\n").length <= rows) { process.stdout.write(text); return; }
-  const pagerCmd = process.env.PAGER || "less -RFX";
-  const parts = pagerCmd.split(/\s+/);
-  spawnSync(parts[0], parts.slice(1), { input: text, stdio: ["pipe", "inherit", "inherit"] });
-}
-
-// Spinner for network operations (stderr only, TTY only)
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-function spinner(label = "Loading") {
-  if (!process.stderr.isTTY) return { stop() {} };
-  let i = 0, stopped = false;
-  const _write = process.stderr.write.bind(process.stderr);
-  const id = setInterval(() => {
-    _write(`\r${SPINNER_FRAMES[i++ % SPINNER_FRAMES.length]} ${label}`);
-  }, 80);
-  const stop = () => { if (stopped) return; stopped = true; clearInterval(id); _write("\r\x1b[K"); };
-  // Auto-clear spinner on first stdout data
-  const origWrite = process.stdout.write;
-  process.stdout.write = function (...a) { stop(); process.stdout.write = origWrite; return origWrite.apply(this, a); };
-  return { stop };
-}
-
-function suggest(input, candidates) {
-  let best = null, bestDist = Infinity;
-  for (const c of candidates) {
-    const d = levenshtein(input, c);
-    if (d < bestDist) { bestDist = d; best = c; }
-  }
-  return bestDist <= 3 ? best : null;
-}
-
-function levenshtein(a, b) {
-  const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, (_, i) => i);
-  for (let j = 1; j <= n; j++) {
-    let prev = dp[0];
-    dp[0] = j;
-    for (let i = 1; i <= m; i++) {
-      const tmp = dp[i];
-      dp[i] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[i], dp[i - 1]);
-      prev = tmp;
-    }
-  }
-  return dp[m];
-}
-
-function checkUnknownFlags(args) {
-  for (const a of args) {
-    if (a === "--") break;
-    if (a.startsWith("-") && !KNOWN_FLAGS.has(a) && !KNOWN_FLAGS.has(a.split("=")[0]) && !/^-\d+$/.test(a)) {
-      const suggestion = suggest(a, [...KNOWN_FLAGS]);
-      let msg = `error: unknown flag "${a}"`;
-      if (suggestion) msg += `\n\n  Did you mean ${c.cyan(suggestion)}?`;
-      msg += `\n\n  hint: Run ${c.cyan('"loom help"')} for available options.`;
-      usageError(msg);
-    }
-  }
-}
-
-function resolveAuth() {
-  if (process.env.LOOM_COOKIE) {
-    return { cookies: process.env.LOOM_COOKIE, sid: null };
-  }
-
-  if (!fs.existsSync(AUTH_FILE)) {
-    die(
-      `error: no auth found\n  ${c.dim("path:")} ${AUTH_FILE}\n\n` +
-      `  hint: Either:\n` +
-      `    ${c.cyan('export LOOM_COOKIE="connect.sid=..."')}  (from browser DevTools)\n` +
-      `    Run ${c.cyan('"node login.js"')} to create auth.json`
-    );
-  }
-
-  const state = JSON.parse(fs.readFileSync(AUTH_FILE, "utf8"));
-  const sid = state.cookies?.find((c) => c.name === "connect.sid");
-  if (!sid) {
-    die(
-      `error: no connect.sid cookie in auth file\n  ${c.dim("path:")} ${AUTH_FILE}\n\n` +
-      `  hint: Re-run ${c.cyan('"node login.js"')} to capture a fresh session.`
-    );
-  }
-  if (sid.expires && sid.expires * 1000 < Date.now()) {
-    die(
-      `error: session expired\n  ${c.dim("expired:")} ${new Date(sid.expires * 1000).toLocaleDateString()}\n\n` +
-      `  hint: Run ${c.cyan('"node refresh.js"')} to extend, or ${c.cyan('"node login.js"')} for a fresh session.`
-    );
-  }
-
-  const cookies = state.cookies
-    .filter((c) => c.domain.includes("loom.com"))
-    .map((c) => `${c.name}=${c.value}`)
-    .join("; ");
-
-  return { cookies, sid };
-}
-
-// --- Formatting ---
-
-function fmtDuration(secs) {
-  if (!secs) return "0s";
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = Math.floor(secs % 60);
-  if (h) return `${h}h ${m}m ${s}s`;
-  return m ? `${m}m ${s}s` : `${s}s`;
-}
-
-function fmtDate(iso) {
-  if (!iso) return "unknown";
-  return new Date(iso).toLocaleDateString("en-US", {
-    year: "numeric", month: "short", day: "numeric",
-  });
-}
-
-function parseId(input) {
-  if (!input) return null;
-  const m = input.match(/loom\.com\/(?:share|looms)\/([a-f0-9]{32})/);
-  return m ? m[1] : input;
-}
-
-function needsId(id, command) {
-  if (!id) usageError(
-    `error: missing required argument\n  command: loom ${command}\n\n` +
-    `  hint: ${COMMANDS[command]?.usage || `loom ${command} <ID>`}\n` +
-    `        Accepts a video ID or full Loom URL.`
-  );
-}
-
-// --- Write command helpers ---
-
-function parseWriteArgs(args, valueFlags = []) {
-  const flags = { dryRun: false, yes: false, force: false, json: false };
-  const positional = [];
-  let pastSeparator = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (!pastSeparator && a === "--") { pastSeparator = true; continue; }
-    if (pastSeparator) { positional.push(a); continue; }
-    if (a === "--dry-run") flags.dryRun = true;
-    else if (a === "--yes" || a === "-y") flags.yes = true;
-    else if (a === "--force" || a === "-f") flags.force = true;
-    else if (a === "--json") flags.json = true;
-    else if (a === "--help" || a === "-h") { /* handled elsewhere */ }
-    else if (valueFlags.includes(a) && i + 1 < args.length) {
-      flags[a.replace(/^--/, "")] = args[++i];
-    } else if (!a.startsWith("-")) {
-      positional.push(a);
-    }
-  }
-  return { flags, positional };
-}
-
-function dryRun(spin, flags, message, preview = {}) {
-  spin.stop();
-  if (flags.json) { console.log(JSON.stringify({ dry_run: true, ...preview }, null, 2)); }
-  else { info(message); }
-}
-
-async function confirm(message) {
-  if (!process.stdin.isTTY) return false;
-  process.stderr.write(`${message} [y/N] `);
-  const buf = Buffer.alloc(64);
-  const fd = fs.openSync("/dev/tty", "r");
-  const n = fs.readSync(fd, buf);
-  fs.closeSync(fd);
-  return /^y(es)?$/i.test(buf.slice(0, n).toString().trim());
-}
-
-// --- Help ---
-
-const READ_COMMANDS = new Set([
-  "list", "search", "video", "transcript", "captions", "download", "chapters",
-  "summary", "description", "comments", "tasks", "reactions", "notes", "folders",
-  "spaces", "backlinks", "tags", "user", "open", "whoami", "dump", "completions",
-  "takeaways", "confluence", "search-folders", "watch-time", "watch-later-count",
-  "video-count", "frequent-reactions", "comment-reactions", "search-tags", "space", "folder",
-]);
-
-function showHelp() {
-  console.log(`${c.bold("Loom CLI")} — query and manage Loom videos from the command line
-
-${c.bold("USAGE")}
-  loom <command> [args] [--json]
-
-${c.bold("READ COMMANDS")}`);
-  for (const [cmd, { desc }] of Object.entries(COMMANDS)) {
-    if (READ_COMMANDS.has(cmd)) console.log(`  ${c.cyan(cmd.padEnd(18))} ${desc}`);
-  }
-  console.log(`\n${c.bold("WRITE COMMANDS")}`);
-  for (const [cmd, { desc }] of Object.entries(COMMANDS)) {
-    if (!READ_COMMANDS.has(cmd)) console.log(`  ${c.cyan(cmd.padEnd(18))} ${desc}`);
-  }
-  console.log(`
-${c.bold("OPTIONS")}
-  --json          Output raw JSON (pipe to jq)
-  -n ${c.dim("<COUNT>")}      Limit results (for list) ${c.dim("[default: 20]")}
-  --all           Show all results (for list)
-  --dry-run       Preview without executing (write commands)
-  --force, -f     Required for destructive commands
-  --yes, -y       Skip confirmation prompts
-  --color ${c.dim("<WHEN>")}   Color output: auto, always, never ${c.dim("[default: auto]")}
-  --no-color      Alias for --color=never
-  -h, --help      Show help
-  -V, --version   Show version
-
-${c.bold("EXAMPLES")}
-  ${c.dim("$")} loom list -n 5
-  ${c.dim("$")} loom video https://www.loom.com/share/abc123...
-  ${c.dim("$")} loom search "onboarding walkthrough"
-  ${c.dim("$")} loom transcript abc123 | pbcopy
-  ${c.dim("$")} loom list --json | jq '.[].name'
-  ${c.dim("$")} loom rename abc123 "New Title"
-  ${c.dim("$")} loom delete abc123 --force
-  ${c.dim("$")} loom move abc123 --to folder456
-
-${c.bold("ENVIRONMENT")}
-  LOOM_COOKIE      connect.sid cookie value ${c.dim("[from browser DevTools]")}
-  LOOM_AUTH_FILE   path to auth.json ${c.dim("[default: ../auth.json]")}
-
-${c.bold("LEARN MORE")}
-  loom <command> --help`);
-}
-
-function showCommandHelp(command) {
-  const cmd = COMMANDS[command];
-  if (!cmd) return false;
-  const isWrite = !READ_COMMANDS.has(command);
-  console.log(`${cmd.desc}
-
-${c.bold("USAGE")}
-  ${cmd.usage} [--json]${isWrite ? " [--dry-run]" : ""}`);
-  if (cmd.examples?.length) {
-    console.log(`\n${c.bold("EXAMPLES")}`);
-    for (const ex of cmd.examples) {
-      console.log(`  ${c.dim("$")} ${ex}`);
-    }
-  }
-  if (isWrite) {
-    console.log(`\n${c.bold("FLAGS")}`);
-    console.log(`  --dry-run       Preview without executing`);
-    console.log(`  --json          Output raw JSON`);
-    if (cmd.usage.includes("--force")) console.log(`  --force, -f     Required (safety guard)`);
-    if (cmd.usage.includes("[ID...]")) console.log(`  --yes, -y       Skip confirmation for bulk operations`);
-  }
-  return true;
-}
-
-// --- Shell completions ---
-
-function generateCompletions(shell) {
-  const cmds = Object.keys(COMMANDS);
-  switch (shell) {
-    case "bash":
-      console.log(`# bash completion for loom
-# Add to ~/.bashrc: eval "$(loom completions bash)"
-_loom() {
-  local cur="\${COMP_WORDS[COMP_CWORD]}"
-  if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=( $(compgen -W "${cmds.join(" ")} help" -- "$cur") )
-  fi
-}
-complete -F _loom loom`);
-      break;
-    case "zsh":
-      console.log(`# zsh completion for loom
-# Add to ~/.zshrc: eval "$(loom completions zsh)"
-_loom() {
-  local -a commands=(
-${cmds.map((c) => `    '${c}:${COMMANDS[c].desc}'`).join("\n")}
-    'help:Show help'
-  )
-  _describe 'command' commands
-}
-compdef _loom loom`);
-      break;
-    case "fish":
-      console.log(`# fish completion for loom
-# Save to ~/.config/fish/completions/loom.fish`);
-      for (const [cmd, { desc }] of Object.entries(COMMANDS)) {
-        console.log(`complete -c loom -n "__fish_use_subcommand" -a ${cmd} -d "${desc}"`);
-      }
-      console.log(`complete -c loom -n "__fish_use_subcommand" -a help -d "Show help"`);
-      break;
-    default:
-      usageError(
-        `error: unknown shell "${shell}"\n\n` +
-        `  hint: loom completions <bash|zsh|fish>`
-      );
-  }
-}
-
-// --- Main ---
-
 async function main() {
-  // Signal handling
   process.on("SIGPIPE", () => process.exit(0));
   process.on("SIGINT", () => process.exit(130));
 
   const [command, ...args] = process.argv.slice(2);
 
-  // Global flags
   if (!command || command === "--help" || command === "-h") {
     showHelp();
     return;
@@ -483,15 +43,12 @@ async function main() {
     return;
   }
 
-  // Per-command --help
   if (args.includes("--help") || args.includes("-h")) {
     if (showCommandHelp(command)) return;
   }
 
-  // Check for unknown flags
-  checkUnknownFlags(args);
+  checkUnknownFlags(args, KNOWN_FLAGS);
 
-  // Reject write-only flags on read commands
   if (READ_COMMANDS.has(command)) {
     for (const a of args) {
       if (a === "--") break;
@@ -504,7 +61,7 @@ async function main() {
   const jsonMode = args.includes("--json");
   const filteredArgs = args.filter((a) => a === "-n" || !a.startsWith("-"));
 
-  const { cookies, sid } = resolveAuth();
+  const { cookies, sid } = resolveAuth(AUTH_FILE);
   const client = new LoomClient(cookies);
   const videoId = parseId(filteredArgs[0]);
 
@@ -515,11 +72,11 @@ async function main() {
         const { videos } = await client.listVideos({ limit: 1 });
         const video = videos[0];
         const v = await client.getVideo(video.id);
-        const owner = v.owner || {};
+        const owner = v.owner || {} as any;
         console.log(`${c.dim("Logged in as:")} ${c.bold(owner.display_name || "unknown")} ${c.dim(`(user ${owner.id || "?"})`)}`);
         if (sid?.expires) {
           const daysLeft = ((sid.expires * 1000 - Date.now()) / 86400000).toFixed(1);
-          const color = daysLeft < 5 ? c.yellow : c.green;
+          const color = Number(daysLeft) < 5 ? c.yellow : c.green;
           console.log(`${c.dim("Session:")}     ${color(`expires in ${daysLeft} days`)}`);
         } else {
           console.log(`${c.dim("Auth:")}        LOOM_COOKIE`);
@@ -547,7 +104,7 @@ async function main() {
         if (args.includes("--all")) limit = Infinity;
 
         const videos = [];
-        let cursor = null;
+        let cursor: string | null = null;
         while (videos.length < limit) {
           const batch = Math.min(50, limit - videos.length);
           const result = await client.listVideos({ limit: batch, cursor });
@@ -566,8 +123,8 @@ async function main() {
         needsId(videoId, "video");
         const v = await client.getVideo(videoId);
         if (jsonMode) return console.log(JSON.stringify(v, null, 2));
-        const owner = (v.owner || {}).display_name || "unknown";
-        const views = (v.views || {}).total || 0;
+        const owner = (v.owner || {} as any).display_name || "unknown";
+        const views = (v.views || {} as any).total || 0;
         console.log(c.bold(v.name));
         console.log(`  ${c.dim("Duration:")}    ${fmtDuration(v.playable_duration)}`);
         console.log(`  ${c.dim("Created:")}     ${fmtDate(v.createdAt)}`);
@@ -670,7 +227,7 @@ async function main() {
       }
       case "folders": {
         const allFolders = [];
-        let folderCursor = null;
+        let folderCursor: string | null = null;
         while (true) {
           const r = await client.listFolders({ limit: 50, cursor: folderCursor });
           allFolders.push(...r.folders);
@@ -687,7 +244,7 @@ async function main() {
       }
       case "spaces": {
         const allSpaces = [];
-        let spaceCursor = null;
+        let spaceCursor: string | null = null;
         while (true) {
           const r = await client.listSpaces({ limit: 50, cursor: spaceCursor });
           allSpaces.push(...r.spaces);
@@ -859,6 +416,7 @@ async function main() {
         console.log(`  ${c.dim("ID:")}         ${c.dim(folderInfo.id)}`);
         break;
       }
+
       // --- Write commands ---
 
       case "rename": {
@@ -892,7 +450,7 @@ async function main() {
       case "archive": case "unarchive": {
         const isArchive = command === "archive";
         const { flags, positional } = parseWriteArgs(args);
-        const ids = positional.map(parseId).filter(Boolean);
+        const ids = positional.map(parseId).filter((id): id is string => id !== null);
         if (ids.length === 0) usageError(`error: missing required argument\n  command: loom ${command}\n\n  hint: loom ${command} <ID> [ID...]`);
         if (isArchive && ids.length > 1 && !flags.yes) {
           const ok = await confirm(`Archive ${ids.length} videos?`);
@@ -966,7 +524,7 @@ async function main() {
         const text = positional.slice(1).join(" ");
         needsId(id, "comment");
         if (!text) usageError(`error: missing required argument\n  command: loom comment\n\n  hint: loom comment <ID> <TEXT> [--at SEC]`);
-        const timestamp = flags.at != null ? parseInt(flags.at, 10) : 0;
+        const timestamp = flags.at != null ? parseInt(flags.at as string, 10) : 0;
         if (flags.at != null && isNaN(timestamp)) usageError(`error: --at must be a number (seconds)\n\n  hint: loom comment <ID> <TEXT> --at 30`);
         if (flags.dryRun) { dryRun(spin, flags, `Would comment on ${c.dim(id)}: "${text}"${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`, { action: "comment", id, content: text, timestamp }); break; }
         const result = await client.createComment(id, text, timestamp);
@@ -999,7 +557,7 @@ async function main() {
         const text = positional.slice(1).join(" ");
         needsId(id, "add-task");
         if (!text) usageError(`error: missing required argument\n  command: loom add-task\n\n  hint: loom add-task <ID> <TEXT> [--at SEC]`);
-        const timestamp = flags.at != null ? parseInt(flags.at, 10) : 0;
+        const timestamp = flags.at != null ? parseInt(flags.at as string, 10) : 0;
         if (flags.at != null && isNaN(timestamp)) usageError(`error: --at must be a number (seconds)\n\n  hint: loom add-task <ID> <TEXT> --at 45`);
         if (flags.dryRun) { dryRun(spin, flags, `Would add task to ${c.dim(id)}: "${text}"${timestamp ? ` @${fmtDuration(timestamp)}` : ""}`, { action: "add-task", id, content: text, timestamp }); break; }
         const result = await client.createTask(id, text, timestamp);
@@ -1083,8 +641,8 @@ async function main() {
 
       case "move": {
         const { flags, positional } = parseWriteArgs(args, ["--to"]);
-        const ids = positional.map(parseId).filter(Boolean);
-        const toFolder = flags.to;
+        const ids = positional.map(parseId).filter((id): id is string => id !== null);
+        const toFolder = flags.to as string;
         if (ids.length === 0) usageError(`error: missing required argument\n  command: loom move\n\n  hint: loom move <ID> [ID...] --to <FOLDER_ID>`);
         if (!toFolder) usageError(`error: --to <FOLDER_ID> required\n\n  hint: loom move <ID> [ID...] --to <FOLDER_ID>`);
         if (ids.length > 1 && !flags.yes) {
@@ -1118,7 +676,7 @@ async function main() {
         needsId(id, "edit-settings");
         const pairs = positional.slice(1);
         if (!pairs.length) usageError(`error: missing settings\n\n  hint: loom edit-settings <ID> <KEY=VALUE> [KEY=VALUE...]\n        Example: loom edit-settings abc123 download_enabled=true`);
-        const settings = {};
+        const settings: Record<string, unknown> = {};
         for (const p of pairs) {
           const [k, ...rest] = p.split("=");
           const v = rest.join("=");
@@ -1181,7 +739,7 @@ async function main() {
         const type = positional[1];
         needsId(id, "add-reaction");
         if (!type) usageError(`error: missing reaction type\n  command: loom add-reaction\n\n  hint: loom add-reaction <ID> <TYPE> --at <SEC>\n        Use ${c.cyan('"loom frequent-reactions"')} to see valid types.`);
-        const timestamp = flags.at != null ? parseInt(flags.at, 10) : 0;
+        const timestamp = flags.at != null ? parseInt(flags.at as string, 10) : 0;
         if (flags.at != null && isNaN(timestamp)) usageError(`error: --at must be a number (seconds)\n\n  hint: loom add-reaction <ID> <TYPE> --at 30`);
         if (flags.dryRun) { dryRun(spin, flags, `Would add ${type} reaction to ${c.dim(id)} @${fmtDuration(timestamp)}`, { action: "add-reaction", id, type, timestamp }); break; }
         const result = await client.addReaction(id, timestamp, type);
@@ -1229,7 +787,7 @@ async function main() {
     spin.stop();
   } catch (err) {
     spin.stop();
-    const msg = err.message || String(err);
+    const msg = (err as Error).message || String(err);
     if (msg.includes("403") || msg.includes("401") || msg.includes("Unauthorized")) {
       die(
         `error: authentication failed\n\n` +
